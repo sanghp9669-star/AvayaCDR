@@ -1,10 +1,13 @@
 import { integer, pgTable, serial, text, timestamp, varchar } from 'drizzle-orm/pg-core';
 
-// Users table linked to Firebase Auth UID
+// Users table linked to Firebase Auth UID or local admin credentials
 export const users = pgTable('users', {
   id: serial('id').primaryKey(),
   uid: text('uid').notNull().unique(),
   email: text('email').notNull(),
+  username: varchar('username', { length: 64 }),
+  passwordHash: text('password_hash'),
+  role: varchar('role', { length: 32 }).notNull().default('admin'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 

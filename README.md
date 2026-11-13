@@ -142,9 +142,23 @@ Thực hiện trên giao diện quản trị SAT của Avaya CM active server:
   docker run -d --name avaya-cdr -p 3000:3000 -p 5000:5000 --env-file .env -v $(pwd)/logs:/app/logs avaya-cdr-monitor
   ```
 
-## 6. Danh sách REST API
+## 6. Xác thực khi Deploy lên Server riêng
 
-Tất cả endpoint `/api/cdr*` yêu cầu `Authorization: Bearer <Firebase_ID_Token>`:
+Hệ thống hỗ trợ song song **2 phương thức đăng nhập**:
+
+1. **Tài khoản Quản trị nội bộ (Local Admin + HS256 JWT — Khuyên dùng cho Linux Server / LAN nội bộ)**:
+   - Hoạt động ngay lập tức qua IP (`http://<server-ip>:3000`) hoặc tên miền nội bộ mà không cần cấu hình Firebase Console hay mở Internet ra Google.
+   - Ở lần truy cập đầu tiên (khi chưa đặt `ADMIN_USERNAME` / `ADMIN_PASSWORD` trong `.env`), màn hình đăng nhập sẽ hiển thị form **Thiết lập tài khoản Quản trị viên lần đầu**.
+   - Hoặc có thể cấu hình sẵn `AUTH_SECRET`, `ADMIN_USERNAME`, `ADMIN_PASSWORD` trong tệp `.env`.
+
+2. **Đăng nhập bằng Google (Firebase Authentication)**:
+   - Nếu gặp lỗi `auth/unauthorized-domain` sau khi deploy lên domain/IP mới: Firebase mặc định chặn OAuth từ các tên miền chưa được khai báo.
+   - Để dùng Google Sign-In trên domain riêng của bạn: tạo dự án Firebase riêng → bật *Google Sign-In* → thêm domain vào **Authentication → Settings → Authorized domains** → điền các biến `FIREBASE_PROJECT_ID` và `VITE_FIREBASE_*` vào `.env` (hoặc cập nhật `firebase-applet-config.json`), sau đó chạy lại `npm run build`.
+
+## 7. Danh sách REST API
+
+Tất cả endpoint `/api/cdr*` yêu cầu `Authorization: Bearer <Local_JWT_or_Firebase_ID_Token>`:
+- `POST /api/auth/setup` / `POST /api/auth/login` — Khởi tạo & đăng nhập tài khoản quản trị nội bộ.
 - `GET /api/cdr` — Lọc theo `from`, `to`, `calling_number`, `called_number`, `trunk_group`, `call_type`, `page`, `page_size`, `sortBy`, `sortDir`.
 - `GET /api/cdr/:id` — Lấy chi tiết bản ghi CDR bao gồm `rawRecord`.
 - `GET /api/cdr/export` — Xuất CSV theo bộ lọc hiện tại.

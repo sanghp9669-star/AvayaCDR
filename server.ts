@@ -25,6 +25,11 @@ import {
   seedSampleAvayaRecords,
 } from './src/db/cdrRepo.ts';
 import {
+  createLocalAdminUser,
+  findLocalUserByIdentifier,
+  hasLocalAdminAccount,
+} from './src/db/users.ts';
+import {
   getStoredConnectionSettings,
   saveConnectionSettings,
 } from './src/db/settingsRepo.ts';
@@ -36,6 +41,13 @@ import {
   getLocalGitInfo,
   readPackageVersion,
 } from './server/updater.ts';
+import {
+  hashPassword,
+  safeEqualString,
+  signLocalAuthToken,
+  validateUsername,
+  verifyPassword,
+} from './server/localAuth.ts';
 import { requireAuth, type AuthRequest } from './src/middleware/auth.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -189,6 +201,197 @@ async function startServer() {
       ok: true,
       service: 'avaya-cm-cdr-server',
     });
+  });
+
+  // In-memory login brute-force protection
+  const loginAttempts = new Map<string, { count: number; resetAt: number }>();
+  const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+  const LOGIN_MAX_ATTEMPTS = 15;
+
+  function checkRateLimit(ip: string): boolean {
+    const now = Date.now();
+    const rec = loginAttempts.get(ip);
+    if (!rec || rec.resetAt <= now) {
+      return true;
+    }
+    return rec.count < LOGIN_MAX_ATTEMPTS;
+  }
+
+  function recordFailedAttempt(ip: string): void {
+    const now = Date.now();
+    const rec = loginAttempts.get(ip);
+    if (!rec || rec.resetAt <= now) {
+      loginAttempts.set(ip, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
+    } else {
+      rec.count += 1;
+    }
+  }
+
+  function clearFailedAttempts(ip: string): void {
+    loginAttempts.delete(ip);
+  }
+
+  function getEnvAdminCredentials(): { username: string; password: string } | null {
+    const username = (process.env.ADMIN_USERNAME || '').trim().toLowerCase();
+    const password = process.env.ADMIN_PASSWORD || '';
+    if (!username || !password) return null;
+    return { username, password };
+  }
+
+  // GET /api/auth/mode — Check whether initial local admin setup is needed
+  app.get('/api/auth/mode', async (_req, res) => {
+    const envAdmin = getEnvAdminCredentials();
+    if (envAdmin) {
+      res.json({ localSetupRequired: false, googleAuthEnabled: true });
+      return;
+    }
+
+    try {
+      const hasAdmin = await hasLocalAdminAccount();
+      res.json({
+        localSetupRequired: !hasAdmin,
+        googleAuthEnabled: true,
+      });
+    } catch (error) {
+      logError('GET /api/auth/mode check failed', error);
+      res.json({ localSetupRequired: false, googleAuthEnabled: true });
+    }
+  });
+
+  // POST /api/auth/setup — Create the very first local admin account (locked once created)
+  app.post('/api/auth/setup', async (req, res) => {
+    try {
+      if (getEnvAdminCredentials() || (await hasLocalAdminAccount())) {
+        res.status(403).json({
+          error: 'Tài khoản quản trị viên đã được thiết lập trước đó.',
+        });
+        return;
+      }
+
+      const rawUsername = typeof req.body?.username === 'string' ? req.body.username : '';
+      const rawEmail = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+      const password = typeof req.body?.password === 'string' ? req.body.password : '';
+
+      const username = validateUsername(rawUsername);
+      if (rawEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail)) {
+        res.status(400).json({ error: 'Địa chỉ email không hợp lệ.' });
+        return;
+      }
+
+      const email = rawEmail || `${username}@avaya-cdr.local`;
+      const passwordHash = hashPassword(password);
+      const created = await createLocalAdminUser(username, email, passwordHash);
+
+      const token = signLocalAuthToken({
+        uid: created.uid,
+        email: created.email,
+        username: created.username || username,
+        role: created.role,
+      });
+
+      res.status(201).json({
+        token,
+        user: {
+          uid: created.uid,
+          email: created.email,
+          username: created.username || username,
+          role: created.role,
+          provider: 'local',
+        },
+      });
+    } catch (error) {
+      logError('POST /api/auth/setup failed', error);
+      res.status(400).json({
+        error: error instanceof Error ? error.message : 'Không thể thiết lập tài khoản quản trị.',
+      });
+    }
+  });
+
+  // POST /api/auth/login — Authenticate local admin account (via .env or PostgreSQL users table)
+  app.post('/api/auth/login', async (req, res) => {
+    const clientIp = req.ip || 'unknown';
+    if (!checkRateLimit(clientIp)) {
+      res.status(429).json({
+        error: 'Quá nhiều lần đăng nhập sai. Vui lòng thử lại sau 15 phút.',
+      });
+      return;
+    }
+
+    try {
+      const identifier =
+        typeof req.body?.identifier === 'string' ? req.body.identifier.trim().toLowerCase() : '';
+      const password = typeof req.body?.password === 'string' ? req.body.password : '';
+
+      if (!identifier || !password) {
+        res.status(400).json({ error: 'Vui lòng nhập tên đăng nhập và mật khẩu.' });
+        return;
+      }
+
+      // 1. Check optional .env admin account
+      const envAdmin = getEnvAdminCredentials();
+      if (
+        envAdmin &&
+        (safeEqualString(identifier, envAdmin.username) ||
+          safeEqualString(identifier, `${envAdmin.username}@avaya-cdr.local`)) &&
+        safeEqualString(password, envAdmin.password)
+      ) {
+        clearFailedAttempts(clientIp);
+        const uid = `local:${envAdmin.username}`;
+        const email = `${envAdmin.username}@avaya-cdr.local`;
+        const token = signLocalAuthToken({
+          uid,
+          email,
+          username: envAdmin.username,
+          role: 'admin',
+        });
+        res.json({
+          token,
+          user: {
+            uid,
+            email,
+            username: envAdmin.username,
+            role: 'admin',
+            provider: 'local',
+          },
+        });
+        return;
+      }
+
+      // 2. Check database local admin user
+      const localUser = await findLocalUserByIdentifier(identifier);
+      if (!localUser || !localUser.passwordHash || !verifyPassword(password, localUser.passwordHash)) {
+        recordFailedAttempt(clientIp);
+        res.status(401).json({ error: 'Tên đăng nhập hoặc mật khẩu không chính xác.' });
+        return;
+      }
+
+      clearFailedAttempts(clientIp);
+      const token = signLocalAuthToken({
+        uid: localUser.uid,
+        email: localUser.email,
+        username: localUser.username || localUser.email,
+        role: localUser.role,
+      });
+
+      res.json({
+        token,
+        user: {
+          uid: localUser.uid,
+          email: localUser.email,
+          username: localUser.username || localUser.email,
+          role: localUser.role,
+          provider: 'local',
+        },
+      });
+    } catch (error) {
+      logError('POST /api/auth/login failed', error);
+      res.status(500).json({ error: 'Không thể xử lý đăng nhập lúc này.' });
+    }
+  });
+
+  // GET /api/auth/me — Validate active session token
+  app.get('/api/auth/me', requireAuth, (req: AuthRequest, res) => {
+    res.json({ user: req.user });
   });
 
   app.get('/api/config/info', requireAuth, async (_req: AuthRequest, res) => {

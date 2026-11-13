@@ -1,11 +1,19 @@
 import type { NextFunction, Request, Response } from 'express';
-import type { DecodedIdToken } from 'firebase-admin/auth';
+import { logError } from '../../server/logger.ts';
+import { verifyLocalAuthToken } from '../../server/localAuth.ts';
 import { getOrCreateUser } from '../db/users.ts';
 import { adminAuth } from '../lib/firebase-admin.ts';
-import { logError } from '../../server/logger.ts';
+
+export interface AuthenticatedUser {
+  uid: string;
+  email?: string;
+  username?: string;
+  role?: string;
+  provider?: 'local' | 'google';
+}
 
 export interface AuthRequest extends Request {
-  user?: DecodedIdToken;
+  user?: AuthenticatedUser;
 }
 
 export const requireAuth = async (
@@ -25,11 +33,30 @@ export const requireAuth = async (
     return;
   }
 
+  // 1. Verify local admin JWT first (works offline/LAN/self-hosted without Google/Firebase domain dependency)
+  const localClaims = verifyLocalAuthToken(token);
+  if (localClaims) {
+    req.user = {
+      uid: localClaims.uid,
+      email: localClaims.email,
+      username: localClaims.username,
+      role: localClaims.role,
+      provider: 'local',
+    };
+    next();
+    return;
+  }
+
+  // 2. Fall back to Firebase ID Token verification (Google Sign-In)
   try {
     const decodedToken = await adminAuth.verifyIdToken(token);
-    req.user = decodedToken;
+    req.user = {
+      uid: decodedToken.uid,
+      email: decodedToken.email,
+      role: 'admin',
+      provider: 'google',
+    };
 
-    // Synchronize user profile to PostgreSQL users table
     if (decodedToken.uid) {
       await getOrCreateUser(decodedToken.uid, decodedToken.email || 'unknown@avaya-cdr.local');
     }
