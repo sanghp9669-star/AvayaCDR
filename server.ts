@@ -27,15 +27,14 @@ import {
 import {
   getStoredConnectionSettings,
   saveConnectionSettings,
-  saveGithubUpdateSettings,
 } from './src/db/settingsRepo.ts';
 import {
   applyGitHubUpdate,
   checkGitHubUpdate,
+  FIXED_GITHUB_BRANCH,
+  FIXED_GITHUB_REPO,
   getLocalGitInfo,
-  normalizeGitHubRepo,
   readPackageVersion,
-  validateBranchName,
 } from './server/updater.ts';
 import { requireAuth, type AuthRequest } from './src/middleware/auth.ts';
 
@@ -306,25 +305,15 @@ async function startServer() {
     }
   });
 
-  // GET /api/system/update/status — Current local version, git state, and saved GitHub repo
+  // GET /api/system/update/status — Current local version and git state (repo URL kept server-side)
   app.get('/api/system/update/status', requireAuth, async (_req: AuthRequest, res) => {
     try {
-      const [stored, gitInfo] = await Promise.all([
-        getStoredConnectionSettings().catch(() => null),
-        getLocalGitInfo(),
-      ]);
-      const githubRepo =
-        stored?.githubRepo || process.env.GITHUB_REPO || gitInfo.detectedRepo || '';
-      const githubBranch =
-        stored?.githubBranch || process.env.GITHUB_BRANCH || gitInfo.currentBranch || 'main';
-
+      const gitInfo = await getLocalGitInfo();
       res.json({
         currentVersion: readPackageVersion(),
-        githubRepo,
-        githubBranch,
+        githubBranch: gitInfo.currentBranch || FIXED_GITHUB_BRANCH,
         isGitRepo: gitInfo.isGitRepo,
         localCommit: gitInfo.localCommit,
-        detectedRepo: gitInfo.detectedRepo,
       });
     } catch (error) {
       logError('GET /api/system/update/status failed', error);
@@ -332,56 +321,10 @@ async function startServer() {
     }
   });
 
-  // PUT /api/system/update/config — Save GitHub repository & branch
-  app.put('/api/system/update/config', requireAuth, async (req: AuthRequest, res) => {
+  // POST /api/system/update/check — Query fixed GitHub repo Releases / commit and compare with local version
+  app.post('/api/system/update/check', requireAuth, async (_req: AuthRequest, res) => {
     try {
-      const rawRepo = typeof req.body?.githubRepo === 'string' ? req.body.githubRepo : '';
-      const rawBranch = typeof req.body?.githubBranch === 'string' ? req.body.githubBranch : 'main';
-      const githubRepo = normalizeGitHubRepo(rawRepo);
-      const githubBranch = validateBranchName(rawBranch);
-
-      const saved = await saveGithubUpdateSettings({
-        githubRepo,
-        githubBranch,
-        updatedBy: req.user?.email || req.user?.uid || 'admin',
-      });
-
-      res.json({
-        githubRepo: saved.githubRepo,
-        githubBranch: saved.githubBranch,
-      });
-    } catch (error) {
-      res.status(400).json({
-        error: error instanceof Error ? error.message : 'Cấu hình GitHub không hợp lệ.',
-      });
-    }
-  });
-
-  // POST /api/system/update/check — Query GitHub Releases / branch commit and compare with local version
-  app.post('/api/system/update/check', requireAuth, async (req: AuthRequest, res) => {
-    try {
-      const stored = await getStoredConnectionSettings().catch(() => null);
-      const gitInfo = await getLocalGitInfo();
-      const rawRepo =
-        typeof req.body?.githubRepo === 'string' && req.body.githubRepo.trim()
-          ? req.body.githubRepo
-          : stored?.githubRepo || process.env.GITHUB_REPO || gitInfo.detectedRepo || '';
-      const rawBranch =
-        typeof req.body?.githubBranch === 'string' && req.body.githubBranch.trim()
-          ? req.body.githubBranch
-          : stored?.githubBranch || process.env.GITHUB_BRANCH || gitInfo.currentBranch || 'main';
-
-      const result = await checkGitHubUpdate(rawRepo, rawBranch);
-
-      // Persist valid repo/branch automatically on check if user supplied it
-      if (req.body?.githubRepo) {
-        await saveGithubUpdateSettings({
-          githubRepo: result.repo,
-          githubBranch: result.branch,
-          updatedBy: req.user?.email || req.user?.uid || 'admin',
-        }).catch(() => {});
-      }
-
+      const result = await checkGitHubUpdate(FIXED_GITHUB_REPO);
       res.json(result);
     } catch (error) {
       logError('POST /api/system/update/check failed', error);
@@ -391,21 +334,10 @@ async function startServer() {
     }
   });
 
-  // POST /api/system/update/apply — Pull from GitHub, install prod deps, rebuild frontend
-  app.post('/api/system/update/apply', requireAuth, async (req: AuthRequest, res) => {
+  // POST /api/system/update/apply — Pull from fixed GitHub repo, install prod deps, rebuild frontend
+  app.post('/api/system/update/apply', requireAuth, async (_req: AuthRequest, res) => {
     try {
-      const stored = await getStoredConnectionSettings().catch(() => null);
-      const gitInfo = await getLocalGitInfo();
-      const rawRepo =
-        typeof req.body?.githubRepo === 'string' && req.body.githubRepo.trim()
-          ? req.body.githubRepo
-          : stored?.githubRepo || process.env.GITHUB_REPO || gitInfo.detectedRepo || '';
-      const rawBranch =
-        typeof req.body?.githubBranch === 'string' && req.body.githubBranch.trim()
-          ? req.body.githubBranch
-          : stored?.githubBranch || process.env.GITHUB_BRANCH || gitInfo.currentBranch || 'main';
-
-      const result = await applyGitHubUpdate(rawRepo, rawBranch);
+      const result = await applyGitHubUpdate(FIXED_GITHUB_REPO);
       res.json(result);
     } catch (error) {
       logError('POST /api/system/update/apply failed', error);

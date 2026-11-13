@@ -7,6 +7,10 @@ import { logError, logListener } from './logger.ts';
 
 const execFileAsync = promisify(execFile);
 
+export const FIXED_GITHUB_REPO = 'sanghp9669-star/AvayaCDR';
+export const FIXED_GITHUB_REPO_URL = 'https://github.com/sanghp9669-star/AvayaCDR.git';
+export const FIXED_GITHUB_BRANCH = 'main';
+
 const REPO_PATTERN = /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/;
 const BRANCH_PATTERN = /^[a-zA-Z0-9_.\-/]+$/;
 
@@ -150,18 +154,35 @@ function buildGitHubHeaders(): Record<string, string> {
   return headers;
 }
 
-export async function checkGitHubUpdate(
-  repoInput: string,
-  branchInput = 'main'
-): Promise<UpdateCheckResult> {
-  const repo = normalizeGitHubRepo(repoInput);
-  if (!repo) {
-    throw new Error('Vui lòng cấu hình GitHub Repository (VD: owner/repo) trước khi kiểm tra.');
+async function resolveDefaultBranch(repo: string, headers: Record<string, string>): Promise<string> {
+  try {
+    const res = await fetch(`https://api.github.com/repos/${repo}`, {
+      headers,
+      signal: AbortSignal.timeout(8000),
+    });
+    if (res.ok) {
+      const data = (await res.json()) as { default_branch?: string };
+      if (data.default_branch && BRANCH_PATTERN.test(data.default_branch)) {
+        return data.default_branch;
+      }
+    }
+  } catch {
+    // Fallback to FIXED_GITHUB_BRANCH
   }
-  const branch = validateBranchName(branchInput);
+  return FIXED_GITHUB_BRANCH;
+}
+
+export async function checkGitHubUpdate(
+  _repoInput = FIXED_GITHUB_REPO,
+  branchOverride?: string
+): Promise<UpdateCheckResult> {
+  const repo = FIXED_GITHUB_REPO;
   const currentVersion = readPackageVersion();
   const gitInfo = await getLocalGitInfo();
   const headers = buildGitHubHeaders();
+  const branch = branchOverride
+    ? validateBranchName(branchOverride)
+    : await resolveDefaultBranch(repo, headers);
 
   // 1. Try GitHub Releases API first
   const releaseApiUrl = `https://api.github.com/repos/${repo}/releases/latest`;
@@ -183,7 +204,6 @@ export async function checkGitHubUpdate(
     const latestVersion = (releaseData.tag_name || '').replace(/^v/i, '') || currentVersion;
     const cmp = compareSemver(latestVersion, currentVersion);
 
-    // Fetch latest commit on branch for commit comparison as well
     let remoteCommit: string | null = null;
     try {
       const commitRes = await fetch(
@@ -199,7 +219,6 @@ export async function checkGitHubUpdate(
     }
 
     return {
-      repo,
       branch,
       currentVersion,
       latestVersion,
@@ -207,7 +226,6 @@ export async function checkGitHubUpdate(
       source: 'release',
       releaseName: releaseData.name || releaseData.tag_name || null,
       releaseNotes: releaseData.body || null,
-      releaseUrl: releaseData.html_url || `https://github.com/${repo}/releases`,
       publishedAt: releaseData.published_at || null,
       localCommit: gitInfo.localCommit,
       remoteCommit,
@@ -221,7 +239,7 @@ export async function checkGitHubUpdate(
     throw new Error(`GitHub API trả về lỗi (${releaseRes.status}): ${errText.slice(0, 160)}`);
   }
 
-  // 2. Fallback: No GitHub Release published -> check package.json + latest commit on branch
+  // 2. Fallback: No GitHub Release published -> check package.json + latest commit on default branch
   const [pkgRes, commitRes] = await Promise.all([
     fetch(
       `https://api.github.com/repos/${repo}/contents/package.json?ref=${encodeURIComponent(branch)}`,
@@ -234,10 +252,12 @@ export async function checkGitHubUpdate(
   ]);
 
   if (!commitRes.ok) {
-    if (commitRes.status === 404) {
-      throw new Error(`Không tìm thấy repository "${repo}" hoặc nhánh "${branch}" trên GitHub.`);
+    if (commitRes.status === 404 || commitRes.status === 409) {
+      throw new Error(
+        `Kho lưu trữ cập nhật hiện chưa có commit hoặc chưa phát hành bản Release trên nhánh "${branch}".`
+      );
     }
-    throw new Error(`Không thể truy vấn GitHub (${commitRes.status}).`);
+    throw new Error(`Không thể truy vấn máy chủ cập nhật (${commitRes.status}).`);
   }
 
   const commitData = (await commitRes.json()) as {
@@ -267,7 +287,6 @@ export async function checkGitHubUpdate(
     Boolean(gitInfo.localCommit && remoteCommit) && gitInfo.localCommit !== remoteCommit;
 
   return {
-    repo,
     branch,
     currentVersion,
     latestVersion,
@@ -275,7 +294,6 @@ export async function checkGitHubUpdate(
     source: 'package_json',
     releaseName: `Branch ${branch}${remoteCommit ? ` (${remoteCommit})` : ''}`,
     releaseNotes: commitData.commit?.message || null,
-    releaseUrl: commitData.html_url || `https://github.com/${repo}`,
     publishedAt: commitData.commit?.committer?.date || null,
     localCommit: gitInfo.localCommit,
     remoteCommit,
@@ -285,14 +303,14 @@ export async function checkGitHubUpdate(
 }
 
 export async function applyGitHubUpdate(
-  repoInput: string,
-  branchInput = 'main'
+  _repoInput = FIXED_GITHUB_REPO,
+  branchOverride?: string
 ): Promise<UpdateApplyResult> {
-  const repo = normalizeGitHubRepo(repoInput);
-  if (!repo) {
-    throw new Error('Chưa cấu hình GitHub Repository.');
-  }
-  const branch = validateBranchName(branchInput);
+  const repo = FIXED_GITHUB_REPO;
+  const headers = buildGitHubHeaders();
+  const branch = branchOverride
+    ? validateBranchName(branchOverride)
+    : await resolveDefaultBranch(repo, headers);
   const cwd = process.cwd();
   const previousVersion = readPackageVersion(cwd);
   const gitInfo = await getLocalGitInfo(cwd);

@@ -19,7 +19,6 @@ export interface CdrConnectionConfigDto {
 }
 
 export interface UpdateCheckResult {
-  repo: string;
   branch: string;
   currentVersion: string;
   latestVersion: string;
@@ -27,7 +26,6 @@ export interface UpdateCheckResult {
   source: 'release' | 'package_json';
   releaseName: string | null;
   releaseNotes: string | null;
-  releaseUrl: string | null;
   publishedAt: string | null;
   localCommit: string | null;
   remoteCommit: string | null;
