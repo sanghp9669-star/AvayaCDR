@@ -5,6 +5,8 @@ import type {
   CdrProtocol,
   CdrQueryFilter,
   CdrRecordDto,
+  UpdateApplyResult,
+  UpdateCheckResult,
 } from '../../shared/cdrTypes';
 
 function buildQueryParams(filter: CdrQueryFilter): string {
@@ -193,4 +195,96 @@ export async function updateConnectionConfig(
     throw new Error(data.error || 'Không thể lưu cấu hình kết nối.');
   }
   return data.connection;
+}
+
+export interface LocalUpdateStatus {
+  currentVersion: string;
+  githubRepo: string;
+  githubBranch: string;
+  isGitRepo: boolean;
+  localCommit: string | null;
+  detectedRepo: string | null;
+}
+
+export async function fetchUpdateStatus(token: string): Promise<LocalUpdateStatus> {
+  const res = await fetch('/api/system/update/status', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Không thể tải trạng thái phiên bản.');
+  }
+  return data;
+}
+
+export async function saveUpdateRepoConfig(
+  token: string,
+  githubRepo: string,
+  githubBranch: string
+): Promise<{ githubRepo: string; githubBranch: string }> {
+  const res = await fetch('/api/system/update/config', {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ githubRepo, githubBranch }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Không thể lưu cấu hình GitHub repository.');
+  }
+  return data;
+}
+
+export async function checkGitHubUpdateApi(
+  token: string,
+  githubRepo: string,
+  githubBranch: string
+): Promise<UpdateCheckResult> {
+  const res = await fetch('/api/system/update/check', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ githubRepo, githubBranch }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Không thể kiểm tra phiên bản trên GitHub.');
+  }
+  return data;
+}
+
+export async function applyGitHubUpdateApi(
+  token: string,
+  githubRepo: string,
+  githubBranch: string
+): Promise<UpdateApplyResult> {
+  const res = await fetch('/api/system/update/apply', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ githubRepo, githubBranch }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Cập nhật từ GitHub thất bại.');
+  }
+  return data;
+}
+
+export async function restartServerApi(token: string): Promise<{ restarting: boolean }> {
+  const res = await fetch('/api/system/restart', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Không thể khởi động lại dịch vụ.');
+  }
+  return data;
 }

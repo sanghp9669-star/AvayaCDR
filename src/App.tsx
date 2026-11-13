@@ -8,6 +8,7 @@ import { CmConfigGuideView } from './components/CmConfigGuideView';
 import { KpiSummaryStrip } from './components/KpiSummaryStrip';
 import { LoginScreen } from './components/LoginScreen';
 import { Sidebar, type ActiveTab } from './components/Sidebar';
+import { SystemUpdateView } from './components/SystemUpdateView';
 import { TopBar } from './components/TopBar';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import {
@@ -241,6 +242,8 @@ function DashboardShell() {
           )}
 
           {activeTab === 'cm-guide' && <CmConfigGuideView />}
+
+          {activeTab === 'update' && <SystemUpdateView />}
         </main>
       </div>
 

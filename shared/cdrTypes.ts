@@ -13,7 +13,41 @@ export interface CdrConnectionConfigDto {
   cmNodeName: string;
   enabled: boolean;
   isListening: boolean;
+  githubRepo: string;
+  githubBranch: string;
   updatedAt?: string;
+}
+
+export interface UpdateCheckResult {
+  repo: string;
+  branch: string;
+  currentVersion: string;
+  latestVersion: string;
+  updateAvailable: boolean;
+  source: 'release' | 'package_json';
+  releaseName: string | null;
+  releaseNotes: string | null;
+  releaseUrl: string | null;
+  publishedAt: string | null;
+  localCommit: string | null;
+  remoteCommit: string | null;
+  isGitRepo: boolean;
+  checkedAt: string;
+}
+
+export interface UpdateStepResult {
+  step: string;
+  ok: boolean;
+  output: string;
+}
+
+export interface UpdateApplyResult {
+  updated: boolean;
+  previousVersion: string;
+  newVersion: string;
+  restartRequired: boolean;
+  steps: UpdateStepResult[];
+  completedAt: string;
 }
 
 export interface CdrRecordDto {

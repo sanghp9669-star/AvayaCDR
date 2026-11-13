@@ -1,6 +1,6 @@
-import { Activity, FileUp, PhoneCall, Settings2, X } from 'lucide-react';
+import { Activity, FileUp, PhoneCall, RefreshCw, Settings2, X } from 'lucide-react';
 
-export type ActiveTab = 'cdr' | 'import' | 'cm-guide';
+export type ActiveTab = 'cdr' | 'import' | 'cm-guide' | 'update';
 
 interface SidebarProps {
   activeTab: ActiveTab;
@@ -13,6 +13,7 @@ const NAV_ITEMS: Array<{ id: ActiveTab; label: string; icon: typeof PhoneCall }>
   { id: 'cdr', label: 'Nhật ký cuộc gọi CDR', icon: PhoneCall },
   { id: 'import', label: 'Kiểm thử & Nạp CDR', icon: FileUp },
   { id: 'cm-guide', label: 'Cấu hình kết nối', icon: Settings2 },
+  { id: 'update', label: 'Cập nhật hệ thống', icon: RefreshCw },
 ];
 
 export function Sidebar({ activeTab, onSelectTab, mobileOpen, onCloseMobile }: SidebarProps) {

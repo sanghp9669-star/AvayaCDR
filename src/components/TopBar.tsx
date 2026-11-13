@@ -15,6 +15,7 @@ const TAB_BREADCRUMBS: Record<ActiveTab, string> = {
   cdr: 'Nhật ký cuộc gọi CDR',
   import: 'Kiểm thử & Nạp CDR',
   'cm-guide': 'Cấu hình kết nối & Avaya CM',
+  update: 'Cập nhật phiên bản từ GitHub',
 };
 
 export function TopBar({

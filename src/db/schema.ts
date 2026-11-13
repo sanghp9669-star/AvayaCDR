@@ -37,6 +37,8 @@ export const cdrSettings = pgTable('cdr_settings', {
   cmSourceIp: varchar('cm_source_ip', { length: 64 }).notNull().default(''),
   cmNodeName: varchar('cm_node_name', { length: 64 }).notNull().default('procr'),
   enabled: integer('enabled').notNull().default(1), // 1 = enabled, 0 = disabled
+  githubRepo: varchar('github_repo', { length: 128 }).notNull().default(''),
+  githubBranch: varchar('github_branch', { length: 64 }).notNull().default('main'),
   updatedBy: text('updated_by'),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });

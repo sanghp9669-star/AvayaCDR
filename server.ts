@@ -27,7 +27,16 @@ import {
 import {
   getStoredConnectionSettings,
   saveConnectionSettings,
+  saveGithubUpdateSettings,
 } from './src/db/settingsRepo.ts';
+import {
+  applyGitHubUpdate,
+  checkGitHubUpdate,
+  getLocalGitInfo,
+  normalizeGitHubRepo,
+  readPackageVersion,
+  validateBranchName,
+} from './server/updater.ts';
 import { requireAuth, type AuthRequest } from './src/middleware/auth.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -151,6 +160,8 @@ async function startServer() {
             cmNodeName: stored.cmNodeName,
             enabled: stored.enabled,
             isListening: cdrListener.isListening(),
+            githubRepo: stored.githubRepo || process.env.GITHUB_REPO || '',
+            githubBranch: stored.githubBranch || process.env.GITHUB_BRANCH || 'main',
             updatedAt: stored.updatedAt,
           };
         }
@@ -169,6 +180,8 @@ async function startServer() {
       cmNodeName: active.cmNodeName,
       enabled: active.enabled,
       isListening: cdrListener.isListening(),
+      githubRepo: process.env.GITHUB_REPO || '',
+      githubBranch: process.env.GITHUB_BRANCH || 'main',
     };
   }
 
@@ -291,6 +304,124 @@ async function startServer() {
       logError('PUT /api/config/connection failed', error);
       res.status(500).json({ error: 'Không thể lưu và áp dụng cấu hình kết nối CDR.' });
     }
+  });
+
+  // GET /api/system/update/status — Current local version, git state, and saved GitHub repo
+  app.get('/api/system/update/status', requireAuth, async (_req: AuthRequest, res) => {
+    try {
+      const [stored, gitInfo] = await Promise.all([
+        getStoredConnectionSettings().catch(() => null),
+        getLocalGitInfo(),
+      ]);
+      const githubRepo =
+        stored?.githubRepo || process.env.GITHUB_REPO || gitInfo.detectedRepo || '';
+      const githubBranch =
+        stored?.githubBranch || process.env.GITHUB_BRANCH || gitInfo.currentBranch || 'main';
+
+      res.json({
+        currentVersion: readPackageVersion(),
+        githubRepo,
+        githubBranch,
+        isGitRepo: gitInfo.isGitRepo,
+        localCommit: gitInfo.localCommit,
+        detectedRepo: gitInfo.detectedRepo,
+      });
+    } catch (error) {
+      logError('GET /api/system/update/status failed', error);
+      res.status(500).json({ error: 'Không thể đọc trạng thái phiên bản hiện tại.' });
+    }
+  });
+
+  // PUT /api/system/update/config — Save GitHub repository & branch
+  app.put('/api/system/update/config', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const rawRepo = typeof req.body?.githubRepo === 'string' ? req.body.githubRepo : '';
+      const rawBranch = typeof req.body?.githubBranch === 'string' ? req.body.githubBranch : 'main';
+      const githubRepo = normalizeGitHubRepo(rawRepo);
+      const githubBranch = validateBranchName(rawBranch);
+
+      const saved = await saveGithubUpdateSettings({
+        githubRepo,
+        githubBranch,
+        updatedBy: req.user?.email || req.user?.uid || 'admin',
+      });
+
+      res.json({
+        githubRepo: saved.githubRepo,
+        githubBranch: saved.githubBranch,
+      });
+    } catch (error) {
+      res.status(400).json({
+        error: error instanceof Error ? error.message : 'Cấu hình GitHub không hợp lệ.',
+      });
+    }
+  });
+
+  // POST /api/system/update/check — Query GitHub Releases / branch commit and compare with local version
+  app.post('/api/system/update/check', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const stored = await getStoredConnectionSettings().catch(() => null);
+      const gitInfo = await getLocalGitInfo();
+      const rawRepo =
+        typeof req.body?.githubRepo === 'string' && req.body.githubRepo.trim()
+          ? req.body.githubRepo
+          : stored?.githubRepo || process.env.GITHUB_REPO || gitInfo.detectedRepo || '';
+      const rawBranch =
+        typeof req.body?.githubBranch === 'string' && req.body.githubBranch.trim()
+          ? req.body.githubBranch
+          : stored?.githubBranch || process.env.GITHUB_BRANCH || gitInfo.currentBranch || 'main';
+
+      const result = await checkGitHubUpdate(rawRepo, rawBranch);
+
+      // Persist valid repo/branch automatically on check if user supplied it
+      if (req.body?.githubRepo) {
+        await saveGithubUpdateSettings({
+          githubRepo: result.repo,
+          githubBranch: result.branch,
+          updatedBy: req.user?.email || req.user?.uid || 'admin',
+        }).catch(() => {});
+      }
+
+      res.json(result);
+    } catch (error) {
+      logError('POST /api/system/update/check failed', error);
+      res.status(400).json({
+        error: error instanceof Error ? error.message : 'Không thể kiểm tra phiên bản trên GitHub.',
+      });
+    }
+  });
+
+  // POST /api/system/update/apply — Pull from GitHub, install prod deps, rebuild frontend
+  app.post('/api/system/update/apply', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const stored = await getStoredConnectionSettings().catch(() => null);
+      const gitInfo = await getLocalGitInfo();
+      const rawRepo =
+        typeof req.body?.githubRepo === 'string' && req.body.githubRepo.trim()
+          ? req.body.githubRepo
+          : stored?.githubRepo || process.env.GITHUB_REPO || gitInfo.detectedRepo || '';
+      const rawBranch =
+        typeof req.body?.githubBranch === 'string' && req.body.githubBranch.trim()
+          ? req.body.githubBranch
+          : stored?.githubBranch || process.env.GITHUB_BRANCH || gitInfo.currentBranch || 'main';
+
+      const result = await applyGitHubUpdate(rawRepo, rawBranch);
+      res.json(result);
+    } catch (error) {
+      logError('POST /api/system/update/apply failed', error);
+      res.status(400).json({
+        error: error instanceof Error ? error.message : 'Cập nhật từ GitHub thất bại.',
+      });
+    }
+  });
+
+  // POST /api/system/restart — Trigger graceful shutdown so systemd/Docker supervisor restarts with new build
+  app.post('/api/system/restart', requireAuth, async (_req: AuthRequest, res) => {
+    res.json({ restarting: true });
+    setTimeout(async () => {
+      await cdrListener.stop();
+      process.exit(0);
+    }, 300);
   });
 
   // GET /api/cdr — Filtered, sorted, paginated CDR list

@@ -12,6 +12,8 @@ export interface StoredConnectionSettings {
   cmSourceIp: string;
   cmNodeName: string;
   enabled: boolean;
+  githubRepo: string;
+  githubBranch: string;
   updatedAt: string;
 }
 
@@ -29,6 +31,8 @@ export async function getStoredConnectionSettings(): Promise<StoredConnectionSet
       cmSourceIp: row.cmSourceIp,
       cmNodeName: row.cmNodeName,
       enabled: row.enabled === 1,
+      githubRepo: row.githubRepo || '',
+      githubBranch: row.githubBranch || 'main',
       updatedAt: row.updatedAt.toISOString(),
     };
   } catch (error) {
@@ -45,9 +49,17 @@ export async function saveConnectionSettings(input: {
   cmSourceIp: string;
   cmNodeName: string;
   enabled: boolean;
+  githubRepo?: string;
+  githubBranch?: string;
   updatedBy: string;
 }): Promise<StoredConnectionSettings> {
   try {
+    const existing = await getStoredConnectionSettings();
+    const githubRepo =
+      input.githubRepo !== undefined ? input.githubRepo : existing?.githubRepo ?? '';
+    const githubBranch =
+      input.githubBranch !== undefined ? input.githubBranch : existing?.githubBranch ?? 'main';
+
     const now = new Date();
     const result = await db
       .insert(cdrSettings)
@@ -60,6 +72,8 @@ export async function saveConnectionSettings(input: {
         cmSourceIp: input.cmSourceIp,
         cmNodeName: input.cmNodeName,
         enabled: input.enabled ? 1 : 0,
+        githubRepo,
+        githubBranch,
         updatedBy: input.updatedBy,
         updatedAt: now,
       })
@@ -73,6 +87,8 @@ export async function saveConnectionSettings(input: {
           cmSourceIp: input.cmSourceIp,
           cmNodeName: input.cmNodeName,
           enabled: input.enabled ? 1 : 0,
+          githubRepo,
+          githubBranch,
           updatedBy: input.updatedBy,
           updatedAt: now,
         },
@@ -88,10 +104,37 @@ export async function saveConnectionSettings(input: {
       cmSourceIp: row.cmSourceIp,
       cmNodeName: row.cmNodeName,
       enabled: row.enabled === 1,
+      githubRepo: row.githubRepo || '',
+      githubBranch: row.githubBranch || 'main',
       updatedAt: row.updatedAt.toISOString(),
     };
   } catch (error) {
     logError('Failed to save cdr_settings to PostgreSQL', error);
     throw new Error('Failed to save connection settings.', { cause: error });
+  }
+}
+
+export async function saveGithubUpdateSettings(input: {
+  githubRepo: string;
+  githubBranch: string;
+  updatedBy: string;
+}): Promise<StoredConnectionSettings> {
+  try {
+    const existing = await getStoredConnectionSettings();
+    return await saveConnectionSettings({
+      listenHost: existing?.listenHost ?? '0.0.0.0',
+      listenPort: existing?.listenPort ?? 5000,
+      protocol: existing?.protocol ?? 'TCP',
+      formatProfile: existing?.formatProfile ?? 'CM4PLUS',
+      cmSourceIp: existing?.cmSourceIp ?? '',
+      cmNodeName: existing?.cmNodeName ?? 'procr',
+      enabled: existing?.enabled ?? true,
+      githubRepo: input.githubRepo,
+      githubBranch: input.githubBranch,
+      updatedBy: input.updatedBy,
+    });
+  } catch (error) {
+    logError('Failed to save GitHub update settings', error);
+    throw new Error('Failed to save GitHub repository settings.', { cause: error });
   }
 }
