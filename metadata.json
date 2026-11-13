@@ -1,0 +1,6 @@
+{
+  "name": "Avaya CM8 CDR Monitor",
+  "description": "Hệ thống giám sát và phân tích dữ liệu cuộc gọi (CDR) cho tổng đài Avaya Communication Manager phiên bản 8 với bộ lọc thời gian, số máy nhánh và trạng thái cuộc gọi.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

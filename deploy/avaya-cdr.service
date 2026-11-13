@@ -1,0 +1,25 @@
+[Unit]
+Description=Avaya Aura CM CDR Listener Service & Web Dashboard
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=avayacdr
+Group=avayacdr
+WorkingDirectory=/opt/avaya-cdr-monitor
+Environment=NODE_ENV=production
+EnvironmentFile=/opt/avaya-cdr-monitor/.env
+ExecStart=/usr/bin/node /opt/avaya-cdr-monitor/server.ts
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=avaya-cdr
+
+# Allow binding unprivileged ports >= 1024 and tighten filesystem access
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
