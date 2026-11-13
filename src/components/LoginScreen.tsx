@@ -1,6 +1,24 @@
-import { Activity, Eye, EyeOff, KeyRound, LogIn, ShieldCheck, UserPlus } from 'lucide-react';
+import {
+  Activity,
+  AlertTriangle,
+  Eye,
+  EyeOff,
+  KeyRound,
+  LogIn,
+  ShieldCheck,
+  UserPlus,
+} from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { useAuth } from '../context/AuthContext';
+
+function isPrivateOrIpHostname(hostname: string): boolean {
+  if (!hostname || hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
+    return false;
+  }
+  // Raw IPv4 addresses (e.g. 172.16.52.114, 192.168.1.10, 10.0.0.5) or .local hostnames
+  const isIpv4 = /^(\d{1,3}\.){3}\d{1,3}$/.test(hostname);
+  return isIpv4 || hostname.endsWith('.local') || !hostname.includes('.');
+}
 
 export function LoginScreen() {
   const {
@@ -9,6 +27,7 @@ export function LoginScreen() {
     setupLocalAdmin,
     authError,
     localSetupRequired,
+    localAuthReady,
     googleSigningIn,
     localSubmitting,
     clearAuthError,
@@ -20,6 +39,10 @@ export function LoginScreen() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [showGoogleOnLan, setShowGoogleOnLan] = useState(false);
+
+  const hostname = typeof window !== 'undefined' ? window.location.hostname : '';
+  const isLanHost = isPrivateOrIpHostname(hostname);
 
   const handleLocalSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -77,10 +100,23 @@ export function LoginScreen() {
           </h2>
           <p className="text-xs leading-relaxed text-slate-600 dark:text-slate-400">
             {localSetupRequired
-              ? 'Máy chủ mới triển khai chưa có tài khoản nội bộ. Hãy tạo tài khoản quản trị để đăng nhập trực tiếp trên server (hỗ trợ cả IP nội bộ và HTTPS).'
+              ? 'Máy chủ mới triển khai chưa có tài khoản nội bộ. Hãy tạo tài khoản quản trị để đăng nhập trực tiếp trên server.'
               : 'Truy cập dữ liệu CDR từ dịch vụ Listen-Only TCP Adjunct của tổng đài Avaya Communication Manager.'}
           </p>
         </div>
+
+        {!localAuthReady && (
+          <div className="rounded-lg border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/40 px-3.5 py-2.5 text-xs leading-relaxed text-amber-800 dark:text-amber-300 flex items-start gap-2">
+            <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" aria-hidden="true" />
+            <div>
+              Cần cập nhật lược đồ tài khoản nội bộ trên server bằng lệnh{' '}
+              <code className="font-mono font-semibold">npx drizzle-kit push --config=src/db/drizzle.config.ts</code>{' '}
+              (hoặc chạy file <code className="font-mono">migrations/004_add_local_admin_auth.sql</code>), hoặc cấu hình{' '}
+              <code className="font-mono">ADMIN_USERNAME</code> / <code className="font-mono">ADMIN_PASSWORD</code> trong{' '}
+              <code className="font-mono">.env</code>.
+            </div>
+          </div>
+        )}
 
         {displayError && (
           <div className="rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/40 px-3.5 py-2.5 text-xs leading-relaxed text-red-700 dark:text-red-400">
@@ -202,21 +238,38 @@ export function LoginScreen() {
           </button>
         </form>
 
-        <div className="relative flex items-center py-1">
-          <div className="flex-grow border-t border-slate-200 dark:border-slate-800" />
-          <span className="mx-3 text-[11px] uppercase tracking-wider text-slate-400">Hoặc</span>
-          <div className="flex-grow border-t border-slate-200 dark:border-slate-800" />
-        </div>
+        {isLanHost && !showGoogleOnLan ? (
+          <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 px-3.5 py-2.5 text-xs text-slate-600 dark:text-slate-400 space-y-1.5">
+            <p className="leading-relaxed">
+              Đang truy cập qua địa chỉ nội bộ (<span className="font-mono">{hostname}</span>). Google OAuth không hỗ trợ IP mạng LAN; vui lòng dùng tài khoản quản trị nội bộ ở trên.
+            </p>
+            <button
+              type="button"
+              onClick={() => setShowGoogleOnLan(true)}
+              className="text-[11px] font-medium text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 underline"
+            >
+              Vẫn thử đăng nhập Google (nếu đã cấu hình Firebase riêng)
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="relative flex items-center py-1">
+              <div className="flex-grow border-t border-slate-200 dark:border-slate-800" />
+              <span className="mx-3 text-[11px] uppercase tracking-wider text-slate-400">Hoặc</span>
+              <div className="flex-grow border-t border-slate-200 dark:border-slate-800" />
+            </div>
 
-        <button
-          type="button"
-          disabled={googleSigningIn}
-          onClick={signInWithGoogle}
-          className="w-full inline-flex items-center justify-center gap-2.5 px-4 py-2.5 text-sm font-semibold rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 transition-colors"
-        >
-          <LogIn className="h-4 w-4" aria-hidden="true" />
-          <span>{googleSigningIn ? 'Đang kết nối Google...' : 'Đăng nhập bằng Google'}</span>
-        </button>
+            <button
+              type="button"
+              disabled={googleSigningIn}
+              onClick={signInWithGoogle}
+              className="w-full inline-flex items-center justify-center gap-2.5 px-4 py-2.5 text-sm font-semibold rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 transition-colors"
+            >
+              <LogIn className="h-4 w-4" aria-hidden="true" />
+              <span>{googleSigningIn ? 'Đang kết nối Google...' : 'Đăng nhập bằng Google'}</span>
+            </button>
+          </>
+        )}
 
         <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 pt-1">
           <ShieldCheck className="h-4 w-4 text-slate-400 shrink-0" aria-hidden="true" />

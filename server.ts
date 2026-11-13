@@ -242,7 +242,7 @@ async function startServer() {
   app.get('/api/auth/mode', async (_req, res) => {
     const envAdmin = getEnvAdminCredentials();
     if (envAdmin) {
-      res.json({ localSetupRequired: false, googleAuthEnabled: true });
+      res.json({ localSetupRequired: false, localAuthReady: true, googleAuthEnabled: true });
       return;
     }
 
@@ -250,11 +250,16 @@ async function startServer() {
       const hasAdmin = await hasLocalAdminAccount();
       res.json({
         localSetupRequired: !hasAdmin,
+        localAuthReady: true,
         googleAuthEnabled: true,
       });
     } catch (error) {
       logError('GET /api/auth/mode check failed', error);
-      res.json({ localSetupRequired: false, googleAuthEnabled: true });
+      res.json({
+        localSetupRequired: false,
+        localAuthReady: false,
+        googleAuthEnabled: true,
+      });
     }
   });
 

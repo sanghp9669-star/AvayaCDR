@@ -29,6 +29,7 @@ interface AuthContextValue {
   loading: boolean;
   authError: string | null;
   localSetupRequired: boolean;
+  localAuthReady: boolean;
   googleSigningIn: boolean;
   localSubmitting: boolean;
   signInWithGoogle: () => Promise<void>;
@@ -48,7 +49,7 @@ function formatGoogleAuthError(err: unknown): string {
 
   switch (code) {
     case 'auth/unauthorized-domain':
-      return `Tên miền hoặc IP hiện tại (${hostname}) chưa được cấp quyền trong Firebase Authentication (auth/unauthorized-domain). Khi deploy lên server riêng, hãy đăng nhập bằng tài khoản Quản trị nội bộ ở trên, hoặc thêm "${hostname}" vào Authorized Domains trên Firebase Console dự án của bạn.`;
+      return `Đăng nhập Google không khả dụng trên địa chỉ "${hostname}" (auth/unauthorized-domain) do chưa được cấp quyền trên Firebase project. Khi chạy trên máy chủ nội bộ hoặc IP LAN, vui lòng sử dụng Tài khoản Quản trị nội bộ ở trên; hoặc gắn tên miền HTTPS và cấu hình Firebase project riêng của bạn.`;
     case 'auth/popup-closed-by-user':
       return 'Cửa sổ đăng nhập Google đã bị đóng trước khi hoàn tất.';
     case 'auth/cancelled-popup-request':
@@ -67,6 +68,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
   const [localSetupRequired, setLocalSetupRequired] = useState(false);
+  const [localAuthReady, setLocalAuthReady] = useState(true);
   const [googleSigningIn, setGoogleSigningIn] = useState(false);
   const [localSubmitting, setLocalSubmitting] = useState(false);
 
@@ -80,8 +82,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         const modeRes = await fetch('/api/auth/mode');
         if (modeRes.ok && active) {
-          const modeData = (await modeRes.json()) as { localSetupRequired?: boolean };
+          const modeData = (await modeRes.json()) as {
+            localSetupRequired?: boolean;
+            localAuthReady?: boolean;
+          };
           setLocalSetupRequired(Boolean(modeData.localSetupRequired));
+          setLocalAuthReady(modeData.localAuthReady !== false);
         }
       } catch {
         // Non-fatal
@@ -287,6 +293,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         loading,
         authError,
         localSetupRequired,
+        localAuthReady,
         googleSigningIn,
         localSubmitting,
         signInWithGoogle,
