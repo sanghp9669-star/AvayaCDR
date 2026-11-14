@@ -216,6 +216,7 @@ export interface LocalUpdateStatus {
   githubBranch: string;
   isGitRepo: boolean;
   localCommit: string | null;
+  dirtyFiles?: string[];
 }
 
 export async function fetchUpdateStatus(token: string): Promise<LocalUpdateStatus> {
@@ -244,13 +245,17 @@ export async function checkGitHubUpdateApi(token: string): Promise<UpdateCheckRe
   return data;
 }
 
-export async function applyGitHubUpdateApi(token: string): Promise<UpdateApplyResult> {
+export async function applyGitHubUpdateApi(
+  token: string,
+  options?: { autoStash?: boolean }
+): Promise<UpdateApplyResult> {
   const res = await fetch('/api/system/update/apply', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
+    body: JSON.stringify({ autoStash: options?.autoStash ?? true }),
   });
   const data = await res.json();
   if (!res.ok) {

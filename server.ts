@@ -534,6 +534,7 @@ async function startServer() {
         githubBranch: gitInfo.currentBranch || FIXED_GITHUB_BRANCH,
         isGitRepo: gitInfo.isGitRepo,
         localCommit: gitInfo.localCommit,
+        dirtyFiles: gitInfo.dirtyFiles,
       });
     } catch (error) {
       logError('GET /api/system/update/status failed', error);
@@ -555,9 +556,11 @@ async function startServer() {
   });
 
   // POST /api/system/update/apply — Pull from fixed GitHub repo, install prod deps, rebuild frontend
-  app.post('/api/system/update/apply', requireAuth, async (_req: AuthRequest, res) => {
+  app.post('/api/system/update/apply', requireAuth, async (req: AuthRequest, res) => {
     try {
-      const result = await applyGitHubUpdate(FIXED_GITHUB_REPO);
+      const body = (req.body || {}) as Record<string, unknown>;
+      const autoStash = body.autoStash !== false;
+      const result = await applyGitHubUpdate(FIXED_GITHUB_REPO, undefined, { autoStash });
       res.json(result);
     } catch (error) {
       logError('POST /api/system/update/apply failed', error);

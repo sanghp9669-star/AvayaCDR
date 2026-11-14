@@ -66,6 +66,7 @@ export interface UpdateCheckResult {
   localCommit: string | null;
   remoteCommit: string | null;
   isGitRepo: boolean;
+  dirtyFiles?: string[];
   checkedAt: string;
 }
 

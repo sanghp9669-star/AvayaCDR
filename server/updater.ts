@@ -93,11 +93,29 @@ async function runSafeCommand(
   });
 }
 
+/**
+ * Parses `git status --porcelain` lines into clean file paths.
+ */
+export function parsePorcelainPaths(stdout: string): string[] {
+  return stdout
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter((line) => line.length >= 4)
+    .map((line) => {
+      const rawPath = line.slice(3).trim();
+      const arrowIdx = rawPath.indexOf(' -> ');
+      const resolved = arrowIdx >= 0 ? rawPath.slice(arrowIdx + 4).trim() : rawPath;
+      return resolved.replace(/^"|"$/g, '');
+    })
+    .filter(Boolean);
+}
+
 export async function getLocalGitInfo(cwd = process.cwd()): Promise<{
   isGitRepo: boolean;
   localCommit: string | null;
   detectedRepo: string | null;
   currentBranch: string | null;
+  dirtyFiles: string[];
 }> {
   const gitDir = path.join(cwd, '.git');
   if (!fs.existsSync(gitDir)) {
@@ -106,12 +124,14 @@ export async function getLocalGitInfo(cwd = process.cwd()): Promise<{
       localCommit: null,
       detectedRepo: null,
       currentBranch: null,
+      dirtyFiles: [],
     };
   }
 
   let localCommit: string | null = null;
   let detectedRepo: string | null = null;
   let currentBranch: string | null = null;
+  let dirtyFiles: string[] = [];
 
   try {
     const { stdout } = await runSafeCommand('git', ['rev-parse', '--short', 'HEAD'], cwd, 5000);
@@ -134,11 +154,24 @@ export async function getLocalGitInfo(cwd = process.cwd()): Promise<{
     // Origin may not be a GitHub URL
   }
 
+  try {
+    const { stdout } = await runSafeCommand(
+      'git',
+      ['status', '--porcelain', '--untracked-files=no'],
+      cwd,
+      5000
+    );
+    dirtyFiles = parsePorcelainPaths(stdout);
+  } catch {
+    // Ignore
+  }
+
   return {
     isGitRepo: true,
     localCommit,
     detectedRepo,
     currentBranch,
+    dirtyFiles,
   };
 }
 
@@ -230,6 +263,7 @@ export async function checkGitHubUpdate(
       localCommit: gitInfo.localCommit,
       remoteCommit,
       isGitRepo: gitInfo.isGitRepo,
+      dirtyFiles: gitInfo.dirtyFiles,
       checkedAt: new Date().toISOString(),
     };
   }
@@ -298,15 +332,18 @@ export async function checkGitHubUpdate(
     localCommit: gitInfo.localCommit,
     remoteCommit,
     isGitRepo: gitInfo.isGitRepo,
+    dirtyFiles: gitInfo.dirtyFiles,
     checkedAt: new Date().toISOString(),
   };
 }
 
 export async function applyGitHubUpdate(
   _repoInput = FIXED_GITHUB_REPO,
-  branchOverride?: string
+  branchOverride?: string,
+  options?: { autoStash?: boolean }
 ): Promise<UpdateApplyResult> {
   const repo = FIXED_GITHUB_REPO;
+  const autoStash = options?.autoStash !== false;
   const headers = buildGitHubHeaders();
   const branch = branchOverride
     ? validateBranchName(branchOverride)
@@ -324,15 +361,51 @@ export async function applyGitHubUpdate(
   const steps: UpdateStepResult[] = [];
   const remoteUrl = `https://github.com/${repo}.git`;
 
-  // Ensure origin or target remote points cleanly without shell interpolation
+  // Check tracked working tree modifications only (never touch untracked .env or logs/.auth-secret)
   try {
-    const statusRes = await runSafeCommand('git', ['status', '--porcelain'], cwd, 10000);
-    if (statusRes.stdout.trim()) {
-      throw new Error(
-        'Thư mục làm việc đang có thay đổi cục bộ chưa commit. Vui lòng dọn dẹp hoặc commit trước khi cập nhật.'
+    const statusRes = await runSafeCommand(
+      'git',
+      ['status', '--porcelain', '--untracked-files=no'],
+      cwd,
+      10000
+    );
+    const dirtyFiles = parsePorcelainPaths(statusRes.stdout);
+
+    if (dirtyFiles.length > 0) {
+      if (!autoStash) {
+        throw new Error(
+          `Thư mục làm việc đang có thay đổi cục bộ chưa commit (${dirtyFiles.join(', ')}). Vui lòng bật tùy chọn tự động sao lưu (git stash) hoặc dọn dẹp trước khi cập nhật.`
+        );
+      }
+
+      const stashLabel = `avaya-cdr-pre-update-${new Date().toISOString()}`;
+      const stashRes = await runSafeCommand(
+        'git',
+        [
+          '-c',
+          'user.name=AvayaCDR-Updater',
+          '-c',
+          'user.email=updater@localhost',
+          'stash',
+          'push',
+          '-m',
+          stashLabel,
+        ],
+        cwd,
+        15000
       );
+      steps.push({
+        step: 'Sao lưu thay đổi cục bộ (git stash)',
+        ok: true,
+        output: `${dirtyFiles.join(', ')}\n${(stashRes.stdout || stashRes.stderr || 'Stashed').trim()}`.trim(),
+      });
+    } else {
+      steps.push({
+        step: 'Kiểm tra trạng thái Git',
+        ok: true,
+        output: 'Working tree sạch (giữ nguyên các tệp runtime như .env, logs/)',
+      });
     }
-    steps.push({ step: 'Kiểm tra trạng thái Git', ok: true, output: 'Working tree clean' });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     steps.push({ step: 'Kiểm tra trạng thái Git', ok: false, output: msg });

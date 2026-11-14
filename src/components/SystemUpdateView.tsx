@@ -25,6 +25,7 @@ export function SystemUpdateView() {
   const [checking, setChecking] = useState(false);
   const [applying, setApplying] = useState(false);
   const [restarting, setRestarting] = useState(false);
+  const [autoStash, setAutoStash] = useState(true);
 
   const [checkResult, setCheckResult] = useState<UpdateCheckResult | null>(null);
   const [applyResult, setApplyResult] = useState<UpdateApplyResult | null>(null);
@@ -74,9 +75,12 @@ export function SystemUpdateView() {
     setNotice(null);
     try {
       const token = await getToken();
-      const result = await applyGitHubUpdateApi(token);
+      const result = await applyGitHubUpdateApi(token, { autoStash });
       setApplyResult(result);
-      setStatus((prev) => (prev ? { ...prev, currentVersion: result.newVersion } : prev));
+      setStatus((prev) =>
+        prev ? { ...prev, currentVersion: result.newVersion, dirtyFiles: [] } : prev
+      );
+      setCheckResult((prev) => (prev ? { ...prev, dirtyFiles: [] } : prev));
       setNotice(
         `Đã cập nhật mã nguồn lên phiên bản v${result.newVersion}. Vui lòng khởi động lại dịch vụ để nạp bản build mới.`
       );
@@ -246,7 +250,31 @@ export function SystemUpdateView() {
             </div>
           )}
 
-          <div className="flex flex-wrap items-center justify-end gap-2.5 pt-2 border-t border-slate-100 dark:border-slate-800">
+          {(checkResult.dirtyFiles?.length || status?.dirtyFiles?.length) ? (
+            <div className="rounded-lg border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 px-3.5 py-2.5 text-xs text-amber-800 dark:text-amber-300 space-y-1">
+              <div className="font-medium">
+                Phát hiện tệp được theo dõi có thay đổi cục bộ:
+              </div>
+              <div className="font-mono text-[11px] break-all">
+                {(checkResult.dirtyFiles || status?.dirtyFiles || []).join(', ')}
+              </div>
+              <div className="text-[11px] opacity-90">
+                Khi bật tự động sao lưu (<code className="font-mono">git stash</code>), hệ thống sẽ lưu bản dự phòng trước khi kéo bản mới và vẫn giữ nguyên <code className="font-mono">.env</code> / <code className="font-mono">logs/</code>.
+              </div>
+            </div>
+          ) : null}
+
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-100 dark:border-slate-800">
+            <label className="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={autoStash}
+                onChange={(e) => setAutoStash(e.target.checked)}
+                className="rounded border-slate-300 dark:border-slate-700 text-red-600 focus:ring-red-500"
+              />
+              <span>Tự động sao lưu thay đổi cục bộ (git stash) trước khi cập nhật</span>
+            </label>
+
             <button
               type="button"
               disabled={applying || !checkResult.isGitRepo}
