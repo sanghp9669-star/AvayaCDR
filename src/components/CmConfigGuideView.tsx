@@ -1,18 +1,21 @@
-import { AlertCircle, CheckCircle2, PauseCircle, Radio, Save } from 'lucide-react';
-import { useEffect, useState, type FormEvent } from 'react';
+import { AlertCircle, CheckCircle2, PauseCircle, Radio, RefreshCw, Save } from 'lucide-react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import {
   AVAYA_CONDITION_TABLE,
   type CdrConnectionConfigDto,
   type CdrFormatProfile,
+  type CdrListenerDiagnosticsDto,
   type CdrProtocol,
 } from '../../shared/cdrTypes';
 import { useAuth } from '../context/AuthContext';
 import {
   fetchConfigInfo,
+  fetchListenerDiagnostics,
   triggerTcpTestCall,
   updateConnectionConfig,
   type ListenerConfigInfo,
 } from '../services/cdrApi';
+import { formatDateTimeParts } from '../utils/formatters';
 
 export function CmConfigGuideView() {
   const { getToken } = useAuth();
@@ -22,6 +25,8 @@ export function CmConfigGuideView() {
   const [testingTcp, setTestingTcp] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [diagnostics, setDiagnostics] = useState<CdrListenerDiagnosticsDto | null>(null);
+  const [diagLoading, setDiagLoading] = useState(false);
 
   // Editable connection form state
   const [listenHost, setListenHost] = useState('0.0.0.0');
@@ -42,14 +47,28 @@ export function CmConfigGuideView() {
     setEnabled(conn.enabled);
   };
 
+  const refreshDiagnostics = useCallback(async () => {
+    setDiagLoading(true);
+    try {
+      const token = await getToken();
+      const diag = await fetchListenerDiagnostics(token);
+      setDiagnostics(diag);
+    } catch {
+      // Non-fatal
+    } finally {
+      setDiagLoading(false);
+    }
+  }, [getToken]);
+
   useEffect(() => {
     let mounted = true;
     setLoading(true);
     getToken()
-      .then((token) => fetchConfigInfo(token))
-      .then((info) => {
+      .then((token) => Promise.all([fetchConfigInfo(token), fetchListenerDiagnostics(token)]))
+      .then(([info, diag]) => {
         if (!mounted) return;
         setConfigInfo(info);
+        setDiagnostics(diag);
         applyConnectionToForm(info.connection);
       })
       .catch((err) => {
@@ -91,6 +110,7 @@ export function CmConfigGuideView() {
 
       setConfigInfo((prev) => (prev ? { ...prev, connection: updated } : prev));
       applyConnectionToForm(updated);
+      void refreshDiagnostics();
       setSuccessMsg(
         updated.enabled
           ? `Đã lưu và áp dụng cấu hình: ${updated.protocol} ${updated.listenHost}:${updated.listenPort} (Profile: ${updated.formatProfile}).`
@@ -110,6 +130,7 @@ export function CmConfigGuideView() {
     try {
       const token = await getToken();
       const res = await triggerTcpTestCall(token);
+      void refreshDiagnostics();
       setSuccessMsg(
         `Đã gửi thành công bản tin CDR qua TCP tới cổng ${res.port} (${res.profile}).`
       );
@@ -346,6 +367,152 @@ export function CmConfigGuideView() {
           </form>
         )}
       </section>
+
+      {/* Live Avaya CM TCP/UDP Socket & Ingestion Diagnostics */}
+      {diagnostics && (
+        <section
+          aria-label="Chẩn đoán kết nối từ Avaya CM"
+          className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-3">
+            <div>
+              <h3 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
+                Giám sát kết nối trực tiếp từ Avaya CM ({diagnostics.protocol} cổng {diagnostics.listenPort})
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Kiểm tra xem tổng đài đã mở socket TCP tới server hay chưa và xem dòng CDR thô gần nhất nhận được.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              disabled={diagLoading}
+              onClick={refreshDiagnostics}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50"
+            >
+              <RefreshCw
+                className={`h-3.5 w-3.5 ${diagLoading ? 'animate-spin' : ''}`}
+                aria-hidden="true"
+              />
+              <span>Làm mới chẩn đoán</span>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 border border-slate-200 dark:border-slate-800 rounded-lg divide-y sm:divide-y-0 sm:divide-x divide-slate-200 dark:divide-slate-800 text-xs">
+            <div className="p-3">
+              <div className="text-slate-500 dark:text-slate-400">Kết nối CM đang mở</div>
+              <div className="mt-1 font-mono tabular-nums text-base font-bold text-slate-900 dark:text-slate-100">
+                {diagnostics.activeClients.length}
+              </div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                Từ chối IP: {diagnostics.totalConnectionsRejected}
+              </div>
+            </div>
+            <div className="p-3">
+              <div className="text-slate-500 dark:text-slate-400">Số dòng CDR nhận được</div>
+              <div className="mt-1 font-mono tabular-nums text-base font-bold text-slate-900 dark:text-slate-100">
+                {diagnostics.totalLinesReceived}
+              </div>
+              <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                {diagnostics.lastReceivedAt
+                  ? formatDateTimeParts(diagnostics.lastReceivedAt).time
+                  : 'Chưa nhận gói nào'}
+              </div>
+            </div>
+            <div className="p-3">
+              <div className="text-slate-500 dark:text-slate-400">Phân tích &amp; lưu thành công</div>
+              <div className="mt-1 font-mono tabular-nums text-base font-bold text-emerald-700 dark:text-emerald-400">
+                {diagnostics.totalIngested}
+              </div>
+              <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                {diagnostics.lastIngestedAt
+                  ? formatDateTimeParts(diagnostics.lastIngestedAt).time
+                  : '-'}
+              </div>
+            </div>
+            <div className="p-3">
+              <div className="text-slate-500 dark:text-slate-400">Lỗi định dạng / xử lý</div>
+              <div
+                className={`mt-1 font-mono tabular-nums text-base font-bold ${
+                  diagnostics.totalParseErrors > 0
+                    ? 'text-red-600 dark:text-red-400'
+                    : 'text-slate-900 dark:text-slate-100'
+                }`}
+              >
+                {diagnostics.totalParseErrors}
+              </div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                Kiểm tra nhật ký bên dưới
+              </div>
+            </div>
+          </div>
+
+          {diagnostics.activeClients.length > 0 && (
+            <div className="space-y-1.5 text-xs">
+              <div className="font-medium text-slate-700 dark:text-slate-300">
+                Phiên TCP đang kết nối từ tổng đài:
+              </div>
+              <div className="divide-y divide-slate-100 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-lg">
+                {diagnostics.activeClients.map((client) => {
+                  const t = formatDateTimeParts(client.connectedAt);
+                  return (
+                    <div
+                      key={client.remoteAddr}
+                      className="px-3 py-2 flex flex-wrap items-center justify-between gap-2 font-mono"
+                    >
+                      <span className="text-slate-900 dark:text-slate-100 font-semibold">
+                        {client.remoteAddr}
+                      </span>
+                      <span className="text-slate-500 dark:text-slate-400">
+                        Kết nối lúc {t.time} {t.date} · {client.bytesReceived} bytes ·{' '}
+                        {client.linesReceived} dòng
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {diagnostics.recentEvents.length > 0 && (
+            <div className="space-y-1.5 text-xs">
+              <div className="font-medium text-slate-700 dark:text-slate-300">
+                Nhật ký nhận dữ liệu gần đây:
+              </div>
+              <div className="max-h-56 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-lg bg-slate-50/50 dark:bg-slate-950/60">
+                {diagnostics.recentEvents.map((ev, idx) => {
+                  const t = formatDateTimeParts(ev.timestamp);
+                  return (
+                    <div key={idx} className="px-3 py-2 space-y-1">
+                      <div className="flex items-start justify-between gap-2">
+                        <span
+                          className={`font-medium ${
+                            ev.level === 'ERROR'
+                              ? 'text-red-700 dark:text-red-400'
+                              : ev.level === 'WARN'
+                              ? 'text-amber-700 dark:text-amber-400'
+                              : 'text-slate-800 dark:text-slate-200'
+                          }`}
+                        >
+                          [{ev.level}] {ev.message}
+                        </span>
+                        <span className="font-mono text-[11px] text-slate-400 shrink-0">
+                          {t.time}
+                        </span>
+                      </div>
+                      {ev.rawPreview && (
+                        <pre className="text-[11px] font-mono text-slate-600 dark:text-slate-400 overflow-x-auto">
+                          RAW: {ev.rawPreview}
+                        </pre>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </section>
+      )}
 
       {/* Dynamic Avaya CM SAT Configuration Guide matching saved port & node */}
       <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4">

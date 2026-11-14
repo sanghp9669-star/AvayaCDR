@@ -63,7 +63,7 @@ Hệ thống sử dụng **Node.js 22 (Express + TypeScript) + PostgreSQL (Drizz
   - `0..5` Date, `6..9` Time, `10..13` Duration (4 ký tự `MMMT`), `14` Condition Code, `15..18` TAC, `19..33` Dialed, `34..43` Calling, `44..49` Account Code, `50..53` Trunk Group.
 - **`UNFORMATTED`**: Dòng phân tách bởi khoảng trắng (hỗ trợ stream tùy biến hoặc test nhanh).
 
-Phân loại `call_type` tự động dựa trên Condition Code, độ dài máy nhánh nội bộ (3–5 chữ số) và Trunk/TAC:
+Phân loại `call_type` tự động dựa trên Condition Code, độ dài máy nhánh nội bộ (3–4 chữ số, tối đa 4 ký tự) và Trunk/TAC:
 - `ineffective`: Condition Code `4` (RNA), `7` (Busy), `8` (Abandoned), `B` (Restricted), `G` (Trunk Fail).
 - `tandem`: Cuộc gọi trung chuyển Trunk-to-Trunk (`E`/`T` hoặc cả hai đầu là số ngoại mạng qua Trunk).
 - `incoming`: Condition Code `9` hoặc số ngoài gọi vào máy nhánh nội bộ.

@@ -4,6 +4,8 @@ export type CdrProtocol = 'TCP' | 'UDP' | 'BOTH';
 
 export type CdrCallType = 'incoming' | 'outgoing' | 'tandem' | 'internal' | 'ineffective';
 
+export const MAX_EXTENSION_LENGTH = 4;
+
 export interface CdrConnectionConfigDto {
   listenHost: string;
   listenPort: number;
@@ -16,6 +18,40 @@ export interface CdrConnectionConfigDto {
   githubRepo: string;
   githubBranch: string;
   updatedAt?: string;
+}
+
+export interface CdrListenerEventDto {
+  timestamp: string;
+  level: 'INFO' | 'WARN' | 'ERROR';
+  message: string;
+  rawPreview?: string;
+}
+
+export interface CdrListenerClientDto {
+  remoteAddr: string;
+  connectedAt: string;
+  bytesReceived: number;
+  linesReceived: number;
+}
+
+export interface CdrListenerDiagnosticsDto {
+  isListening: boolean;
+  listenHost: string;
+  listenPort: number;
+  protocol: CdrProtocol;
+  formatProfile: CdrFormatProfile;
+  cmSourceIp: string;
+  startedAt: string;
+  totalConnectionsAccepted: number;
+  totalConnectionsRejected: number;
+  totalLinesReceived: number;
+  totalIngested: number;
+  totalParseErrors: number;
+  lastConnectedAt: string | null;
+  lastReceivedAt: string | null;
+  lastIngestedAt: string | null;
+  activeClients: CdrListenerClientDto[];
+  recentEvents: CdrListenerEventDto[];
 }
 
 export interface UpdateCheckResult {

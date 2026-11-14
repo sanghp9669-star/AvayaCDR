@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildFixedWidthCdrLine, CdrParser } from './cdrParser.ts';
+import { buildFixedWidthCdrLine, CdrParser, isInternalExtension } from './cdrParser.ts';
 
 test('CdrParser parses CM4PLUS fixed-width incoming, outgoing, tandem, and ineffective calls', () => {
   const parser = new CdrParser('CM4PLUS');
@@ -78,6 +78,48 @@ test('CdrParser parses CM4PLUS fixed-width incoming, outgoing, tandem, and ineff
   const ineffective = parser.parseLine(ineffectiveLine);
   assert.equal(ineffective.callType, 'ineffective');
   assert.equal(ineffective.callDurationSec, 0);
+});
+
+test('CdrParser enforces maximum extension length of 4 digits', () => {
+  assert.equal(isInternalExtension('101'), true);
+  assert.equal(isInternalExtension('3001'), true);
+  assert.equal(isInternalExtension('10001'), false);
+
+  const parser = new CdrParser('UNFORMATTED');
+  const fiveDigitLine = '111226 0915 00020 0 801 50001 50002 - 1 00001000011731458290';
+  const parsed = parser.parseLine(fiveDigitLine, 'UNFORMATTED');
+  assert.equal(parsed.callType, 'tandem');
+  assert.equal(parsed.station, null);
+
+  const cm4Parser = new CdrParser('CM4PLUS');
+  const rawWithFiveCharStation =
+    '1112260915000200801 90987654321       2101           AC1001  00012101900001000011731458290';
+  const parsedCm4 = cm4Parser.parseLine(rawWithFiveCharStation);
+  assert.equal(parsedCm4.station, '2101');
+  assert.equal(parsedCm4.station?.length, 4);
+});
+
+test('CdrParser parses Avaya CM8 DDMMYY (day/month) and 59-byte time-first unformatted lines', () => {
+  const parser = new CdrParser('CM4PLUS');
+
+  // DDMMYY (14/11/2026) with CR/NUL stripped
+  const ddmmyyLine =
+    '1411260915000359801 3001              0903451289     AC1001  00013001 00001000011731458290';
+  const parsedDayMonth = parser.parseLine(ddmmyyLine);
+  assert.equal(parsedDayMonth.callStartTime.getFullYear(), 2026);
+  assert.equal(parsedDayMonth.callStartTime.getMonth(), 10); // November (0-indexed)
+  assert.equal(parsedDayMonth.callStartTime.getDate(), 14);
+  assert.equal(parsedDayMonth.callType, 'incoming');
+
+  // Time-first 59-byte Avaya Unformatted CDR (HHMM + Dur4 + Cond1 + TAC4 + Dialed15 + Calling10)
+  const timeFirstLine = '143500159801 3001           0903451289AC1001         0001';
+  const parsedTimeFirst = parser.parseLine(timeFirstLine, 'CM4PLUS', new Date(2026, 10, 14));
+  assert.equal(parsedTimeFirst.callStartTime.getHours(), 14);
+  assert.equal(parsedTimeFirst.callStartTime.getMinutes(), 35);
+  assert.equal(parsedTimeFirst.callDurationSec, 90);
+  assert.equal(parsedTimeFirst.calledNumber, '3001');
+  assert.equal(parsedTimeFirst.callingNumber, '0903451289');
+  assert.equal(parsedTimeFirst.callType, 'incoming');
 });
 
 test('CdrParser supports LEGACY fixed-width profile and UNFORMATTED space-delimited profile', () => {

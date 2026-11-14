@@ -1,12 +1,20 @@
-import type { CdrCallType, CdrFormatProfile } from '../shared/cdrTypes.ts';
+import {
+  MAX_EXTENSION_LENGTH,
+  type CdrCallType,
+  type CdrFormatProfile,
+} from '../shared/cdrTypes.ts';
 
 /**
  * Avaya Aura Communication Manager (CM) Legacy CDR Parser
  * Reference: "Call Detail Recording" in Avaya Aura CM Feature Description and Implementation (R10.3.x)
  *
  * CM emits one ASCII line per call record over IP (CDR1 / CDR2 service in `change ip-services`)
- * in listen-only adjunct mode. Each format profile defines fixed positional character slices
- * (0-indexed [start, start + length)) or token rules so new CM customized layouts can be added easily.
+ * in listen-only adjunct mode. Supports:
+ * - CM4PLUS (90-byte fixed-width with UCID & Station)
+ * - LEGACY (54-byte fixed-width Definity / CM R1-R3)
+ * - Avaya Standard Time-First Unformatted (44-78 byte lines starting with HHMM + Dur + Cond)
+ * - UNFORMATTED (space/tab/comma-delimited streams)
+ * - Both MMDDYY (month/day) and DDMMYY (day/month) Avaya date formats
  */
 
 export interface PositionalFieldSpec {
@@ -20,7 +28,7 @@ export interface CdrProfileDefinition {
   description: string;
   minLineLength: number;
   fields: {
-    date: PositionalFieldSpec; // MMDDYY (6) or MMDD (4)
+    date: PositionalFieldSpec; // MMDDYY (6) or DDMMYY (6)
     time: PositionalFieldSpec; // HHMM (4)
     duration: PositionalFieldSpec; // HHHHM (4 or 5: minutes + tenths of minute)
     conditionCode: PositionalFieldSpec; // 1 char
@@ -29,34 +37,18 @@ export interface CdrProfileDefinition {
     callingNumber: PositionalFieldSpec; // Calling party number (10 or 15 chars)
     accountCode?: PositionalFieldSpec; // Optional Account Code (6-15 chars)
     trunkGroup?: PositionalFieldSpec; // Optional Trunk Group ID (3-4 chars)
-    station?: PositionalFieldSpec; // Optional Station / Extension (4-6 chars)
+    station?: PositionalFieldSpec; // Optional Station / Extension (max 4 chars)
     ucid?: PositionalFieldSpec; // Optional 20-char hex Universal Call ID
   };
 }
 
-/**
- * Registry of supported Avaya CM CDR Format Profiles.
- * Adding a new customized CDR layout only requires adding an entry here.
- */
 export const CDR_FORMAT_PROFILES: Record<CdrFormatProfile, CdrProfileDefinition> = {
-  /**
-   * LEGACY (Classic Avaya Definity / CM R1.x-R3.x Fixed-Width 59-char Unformatted CDR):
-   * Pos  0..5  (6): Date MMDDYY
-   * Pos  6..9  (4): Start Time HHMM
-   * Pos 10..13 (4): Duration HHH T (hours/minutes in tenths, e.g. 0015 = 1.5 min = 90s)
-   * Pos 14..14 (1): Condition Code (0, 4, 7, 8, 9, A, B, C, E, G)
-   * Pos 15..18 (4): Access Code / TAC (space-padded)
-   * Pos 19..33 (15): Dialed / Called Number
-   * Pos 34..43 (10): Calling Number
-   * Pos 44..49 (6): Account Code
-   * Pos 50..53 (4): Trunk Group (optional extension)
-   */
   LEGACY: {
     name: 'LEGACY',
     description: 'Avaya Legacy Fixed-Width Unformatted CDR (54+ bytes)',
     minLineLength: 44,
     fields: {
-      date: { start: 0, length: 6, description: 'MMDDYY call date' },
+      date: { start: 0, length: 6, description: 'MMDDYY or DDMMYY call date' },
       time: { start: 6, length: 4, description: 'HHMM call start time' },
       duration: { start: 10, length: 4, description: 'MMMT duration (tenths of a minute)' },
       conditionCode: { start: 14, length: 1, description: 'Avaya Condition Code' },
@@ -68,26 +60,12 @@ export const CDR_FORMAT_PROFILES: Record<CdrFormatProfile, CdrProfileDefinition>
     },
   },
 
-  /**
-   * CM4PLUS (Avaya Aura CM 4.x - R10.3.x Expanded Fixed-Width CDR - 89 bytes):
-   * Pos  0..5  (6): Date MMDDYY
-   * Pos  6..9  (4): Start Time HHMM
-   * Pos 10..14 (5): Duration HHHHT (tenths of a minute, e.g. 00042 = 4.2 min = 252s)
-   * Pos 15..15 (1): Condition Code
-   * Pos 16..19 (4): Access Code / TAC (e.g. 801, 802)
-   * Pos 20..37 (18): Dialed / Called Number
-   * Pos 38..52 (15): Calling Number
-   * Pos 53..60 (8): Account Code
-   * Pos 61..64 (4): Trunk Group (e.g. TG01 or 0001)
-   * Pos 65..69 (5): Primary Station / Extension
-   * Pos 70..89 (20): UCID (20-char hex Universal Call ID)
-   */
   CM4PLUS: {
     name: 'CM4PLUS',
     description: 'Avaya Aura CM 4.x–R10.3.x Expanded CDR with UCID & Trunk Group (90 bytes)',
     minLineLength: 53,
     fields: {
-      date: { start: 0, length: 6, description: 'MMDDYY call date' },
+      date: { start: 0, length: 6, description: 'MMDDYY or DDMMYY call date' },
       time: { start: 6, length: 4, description: 'HHMM call start time' },
       duration: { start: 10, length: 5, description: 'MMMMT duration (tenths of a minute)' },
       conditionCode: { start: 15, length: 1, description: 'Avaya Condition Code' },
@@ -101,17 +79,13 @@ export const CDR_FORMAT_PROFILES: Record<CdrFormatProfile, CdrProfileDefinition>
     },
   },
 
-  /**
-   * UNFORMATTED (Space-delimited Avaya CDR / Customized IP stream):
-   * Tokens: MMDDYY HHMM DDDDD COND TAC DIALED CALLING [ACCT] [TRUNK] [UCID]
-   */
   UNFORMATTED: {
     name: 'UNFORMATTED',
-    description: 'Space-delimited Avaya Unformatted CDR stream',
+    description: 'Space/delimiter-separated or Time-first 59-byte Avaya Unformatted CDR stream',
     minLineLength: 20,
     fields: {
-      date: { start: 0, length: 6, description: 'Token 0: MMDDYY' },
-      time: { start: 0, length: 4, description: 'Token 1: HHMM' },
+      date: { start: 0, length: 6, description: 'Token 0: MMDDYY / DDMMYY / YYYYMMDD' },
+      time: { start: 0, length: 4, description: 'Token 1: HHMM / HH:MM' },
       duration: { start: 0, length: 5, description: 'Token 2: MMMMT' },
       conditionCode: { start: 0, length: 1, description: 'Token 3: Condition Code' },
       accessCode: { start: 0, length: 4, description: 'Token 4: TAC' },
@@ -150,29 +124,148 @@ function sanitizePrintable(value: string, maxLen = 32): string {
 }
 
 /**
- * Parses Avaya MMDDYY + HHMM into a valid Date.
+ * Checks whether a standalone line from Avaya CM is a Date header banner
+ * (e.g., "111426", "14/11/26", "11/14/2026") rather than a call record.
  */
-function parseAvayaDateTime(dateStr: string, timeStr: string): Date {
-  if (!/^\d{6}$/.test(dateStr) || !/^\d{4}$/.test(timeStr)) {
-    throw new Error(`Invalid Avaya date/time tokens: "${dateStr}" "${timeStr}"`);
-  }
-  const month = Number.parseInt(dateStr.slice(0, 2), 10);
-  const day = Number.parseInt(dateStr.slice(2, 4), 10);
-  const year = 2000 + Number.parseInt(dateStr.slice(4, 6), 10);
-  const hour = Number.parseInt(timeStr.slice(0, 2), 10);
-  const minute = Number.parseInt(timeStr.slice(2, 4), 10);
+export function tryParseDateHeaderLine(rawLine: string): Date | null {
+  const clean = rawLine.replace(/[\r\n\0]+/g, '').trim();
+  if (!clean || clean.length > 16) return null;
 
-  if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59) {
-    throw new Error(`Out-of-range Avaya date/time: ${dateStr} ${timeStr}`);
+  if (/^\d{6}$/.test(clean)) {
+    try {
+      return parseAvayaDateOnly(clean);
+    } catch {
+      return null;
+    }
   }
-  return new Date(year, month - 1, day, hour, minute, 0, 0);
+
+  const slash = clean.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/);
+  if (slash) {
+    const p1 = Number.parseInt(slash[1], 10);
+    const p2 = Number.parseInt(slash[2], 10);
+    let yr = Number.parseInt(slash[3], 10);
+    if (yr < 100) yr += 2000;
+    const [month, day] = p1 > 12 ? [p2, p1] : [p1, p2];
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      return new Date(yr, month - 1, day, 0, 0, 0, 0);
+    }
+  }
+
+  return null;
+}
+
+function parseAvayaDateOnly(dateStr: string): Date {
+  const clean = dateStr.trim();
+
+  if (/^\d{8}$/.test(clean)) {
+    const year = Number.parseInt(clean.slice(0, 4), 10);
+    const month = Number.parseInt(clean.slice(4, 6), 10);
+    const day = Number.parseInt(clean.slice(6, 8), 10);
+    if (year >= 2000 && month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      return new Date(year, month - 1, day, 0, 0, 0, 0);
+    }
+    throw new Error(`Out-of-range Avaya YYYYMMDD date: ${dateStr}`);
+  }
+
+  if (/^\d{6}$/.test(clean)) {
+    const p1 = Number.parseInt(clean.slice(0, 2), 10);
+    const p2 = Number.parseInt(clean.slice(2, 4), 10);
+    const year = 2000 + Number.parseInt(clean.slice(4, 6), 10);
+
+    // Support both MMDDYY (US/Avaya default) and DDMMYY (day/month used in Vietnam/EU)
+    let month = p1;
+    let day = p2;
+    if (p1 > 12 && p1 <= 31 && p2 >= 1 && p2 <= 12) {
+      day = p1;
+      month = p2;
+    }
+
+    if (month < 1 || month > 12 || day < 1 || day > 31) {
+      throw new Error(`Out-of-range Avaya date: ${dateStr}`);
+    }
+    return new Date(year, month - 1, day, 0, 0, 0, 0);
+  }
+
+  if (/^\d{4}$/.test(clean)) {
+    const p1 = Number.parseInt(clean.slice(0, 2), 10);
+    const p2 = Number.parseInt(clean.slice(2, 4), 10);
+    const year = new Date().getFullYear();
+    const [month, day] = p1 > 12 && p1 <= 31 && p2 >= 1 && p2 <= 12 ? [p2, p1] : [p1, p2];
+    if (month < 1 || month > 12 || day < 1 || day > 31) {
+      throw new Error(`Out-of-range Avaya MMDD date: ${dateStr}`);
+    }
+    return new Date(year, month - 1, day, 0, 0, 0, 0);
+  }
+
+  const sep = clean.match(/^(\d{2,4})[/-](\d{1,2})[/-](\d{1,4})$/);
+  if (sep) {
+    const a = Number.parseInt(sep[1], 10);
+    const b = Number.parseInt(sep[2], 10);
+    const c = Number.parseInt(sep[3], 10);
+    if (sep[1].length === 4 && b >= 1 && b <= 12 && c >= 1 && c <= 31) {
+      return new Date(a, b - 1, c, 0, 0, 0, 0);
+    }
+    const year = c < 100 ? 2000 + c : c;
+    const [month, day] = a > 12 ? [b, a] : [a, b];
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      return new Date(year, month - 1, day, 0, 0, 0, 0);
+    }
+  }
+
+  throw new Error(`Invalid Avaya date token: "${dateStr}"`);
+}
+
+function parseAvayaTimeOnly(timeStr: string): { hour: number; minute: number; second: number } {
+  const digits = timeStr.replace(/[:\s]/g, '');
+  if (!/^\d{4}(\d{2})?$/.test(digits)) {
+    throw new Error(`Invalid Avaya time token: "${timeStr}"`);
+  }
+  const hour = Number.parseInt(digits.slice(0, 2), 10);
+  const minute = Number.parseInt(digits.slice(2, 4), 10);
+  const second = digits.length === 6 ? Number.parseInt(digits.slice(4, 6), 10) : 0;
+  if (hour > 23 || minute > 59 || second > 59) {
+    throw new Error(`Out-of-range Avaya time: ${timeStr}`);
+  }
+  return { hour, minute, second };
 }
 
 /**
- * Avaya CM Legacy CDR encodes duration in tenths of a minute (e.g. "0015" = 1.5 min = 90 sec).
- * If the string uses HHMM format or seconds suffix (in customized profiles), we handle tenths cleanly.
+ * Parses Avaya date (MMDDYY, DDMMYY, MMDD, YYYYMMDD) + time (HHMM, HHMMSS, HH:MM) into a Date.
  */
-function parseAvayaTenthsDuration(rawDuration: string): number {
+function parseAvayaDateTime(dateStr: string, timeStr: string): Date {
+  if (!/^\d{4,8}$/.test(dateStr.trim()) && !/^\d{2,4}[/-]\d{1,2}[/-]\d{1,4}$/.test(dateStr.trim())) {
+    throw new Error(`Invalid Avaya date/time tokens: "${dateStr}" "${timeStr}"`);
+  }
+  const baseDate = parseAvayaDateOnly(dateStr);
+  const { hour, minute, second } = parseAvayaTimeOnly(timeStr);
+  return new Date(
+    baseDate.getFullYear(),
+    baseDate.getMonth(),
+    baseDate.getDate(),
+    hour,
+    minute,
+    second,
+    0
+  );
+}
+
+/**
+ * Avaya CM Legacy CDR encodes duration in tenths of a minute (e.g. "0015" = 1.5 min = 90 sec)
+ * or optionally HH:MM:SS / MM:SS in customized streams.
+ */
+function parseAvayaDuration(rawDuration: string): number {
+  const colonMatch = rawDuration.trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (colonMatch) {
+    if (colonMatch[3] !== undefined) {
+      return (
+        Number.parseInt(colonMatch[1], 10) * 3600 +
+        Number.parseInt(colonMatch[2], 10) * 60 +
+        Number.parseInt(colonMatch[3], 10)
+      );
+    }
+    return Number.parseInt(colonMatch[1], 10) * 60 + Number.parseInt(colonMatch[2], 10);
+  }
+
   const cleaned = rawDuration.replace(/\D/g, '');
   if (!cleaned) return 0;
   const totalTenths = Number.parseInt(cleaned, 10);
@@ -182,8 +275,8 @@ function parseAvayaTenthsDuration(rawDuration: string): number {
   return wholeMinutes * 60 + tenths * 6;
 }
 
-function isInternalExtension(num: string): boolean {
-  return /^\d{3,5}$/.test(num);
+export function isInternalExtension(num: string): boolean {
+  return /^\d+$/.test(num) && num.length >= 3 && num.length <= MAX_EXTENSION_LENGTH;
 }
 
 function classifyCallType(params: {
@@ -202,25 +295,18 @@ function classifyCallType(params: {
   const calledExt = isInternalExtension(params.calledNumber);
   const hasTrunk = Boolean(params.accessCode || (params.trunkGroup && params.trunkGroup !== '-'));
 
-  // Tandem: Condition E/C/T with external-to-external or trunk-to-trunk routing
   if ((cond === 'E' || cond === 'T') && (!callingExt || !calledExt)) {
     return 'tandem';
   }
   if (!callingExt && !calledExt && hasTrunk) {
     return 'tandem';
   }
-
-  // Incoming: Condition 9 or external calling -> internal extension
   if (cond === '9' || (!callingExt && calledExt)) {
     return 'incoming';
   }
-
-  // Outgoing: Internal extension calling external number (often via TAC/trunk)
   if (callingExt && !calledExt) {
     return 'outgoing';
   }
-
-  // Station-to-station internal
   if (callingExt && calledExt) {
     return 'internal';
   }
@@ -258,12 +344,16 @@ export class CdrParser {
   }
 
   /**
-   * Parses a single raw Avaya CDR line according to the configured profile.
-   * Automatically handles space-delimited lines when UNFORMATTED is chosen or when
-   * incoming line clearly uses space-separated tokens.
+   * Parses a single raw Avaya CDR line.
+   * Supports configured profile first, with intelligent fallback across Avaya CM 8 layouts
+   * (time-first 59-char unformatted, LEGACY, CM4PLUS, and space/comma/tab-delimited lines).
    */
-  public parseLine(rawLine: string, overrideProfile?: CdrFormatProfile): ParsedCdrRecord {
-    const cleanRaw = rawLine.replace(/[\r\n]+/g, '');
+  public parseLine(
+    rawLine: string,
+    overrideProfile?: CdrFormatProfile,
+    fallbackDate?: Date | null
+  ): ParsedCdrRecord {
+    const cleanRaw = rawLine.replace(/[\r\n\0]+/g, '');
     const trimmed = cleanRaw.trim();
     if (!trimmed) {
       throw new Error('Empty CDR line');
@@ -271,12 +361,121 @@ export class CdrParser {
 
     const activeProfile = overrideProfile || this.profile;
 
-    // Check if space-delimited UNFORMATTED profile or space-separated token format
-    if (activeProfile === 'UNFORMATTED' || /^\d{6}\s+\d{4}\s+\d{4,5}\s+[A-Za-z0-9]/.test(trimmed)) {
-      return this.parseSpaceDelimited(trimmed, cleanRaw, activeProfile);
+    // 1. Space, tab, or comma-delimited customized / UNFORMATTED stream
+    if (
+      activeProfile === 'UNFORMATTED' ||
+      /^\d{4,8}(?:[/-]\d{1,2}[/-]\d{2,4})?[\s,;]+\d{2}:?\d{2}/.test(trimmed)
+    ) {
+      return this.parseDelimited(trimmed, cleanRaw, activeProfile);
     }
 
-    return this.parseFixedWidth(cleanRaw, activeProfile);
+    // 2. Primary configured fixed-width profile
+    try {
+      return this.parseFixedWidth(cleanRaw, activeProfile);
+    } catch (primaryErr) {
+      // If an explicit overrideProfile was requested and line is clearly shorter than its minLineLength,
+      // preserve descriptive error unless it matches another valid Avaya CM fixed layout of sufficient length.
+      const altProfile: CdrFormatProfile = activeProfile === 'CM4PLUS' ? 'LEGACY' : 'CM4PLUS';
+      if (cleanRaw.length >= CDR_FORMAT_PROFILES[altProfile].minLineLength) {
+        try {
+          return this.parseFixedWidth(cleanRaw, altProfile);
+        } catch {
+          // Continue to time-first unformatted check
+        }
+      }
+
+      // 3. Avaya CM 8 Standard 59-byte Time-First Unformatted CDR (no date prefix in call line: HHMM + Dur4 + Cond1...)
+      if (this.looksLikeTimeFirstUnformatted(cleanRaw)) {
+        try {
+          return this.parseTimeFirstUnformatted(cleanRaw, fallbackDate);
+        } catch {
+          // Fall through to throw primary error
+        }
+      }
+
+      throw primaryErr;
+    }
+  }
+
+  private looksLikeTimeFirstUnformatted(line: string): boolean {
+    if (line.length < 36) return false;
+    const hhmm = line.slice(0, 4);
+    const dur = line.slice(4, 8);
+    const cond = line.slice(8, 9);
+    if (!/^\d{4}$/.test(hhmm) || !/^\d{4}$/.test(dur) || !/^[0-9A-Za-z]$/.test(cond)) {
+      return false;
+    }
+    const hh = Number.parseInt(hhmm.slice(0, 2), 10);
+    const mm = Number.parseInt(hhmm.slice(2, 4), 10);
+    return hh <= 23 && mm <= 59;
+  }
+
+  /**
+   * Standard Avaya CM Unformatted 59-byte record (without per-line date):
+   * 0..3 (4): HHMM
+   * 4..7 (4): Duration (tenths of min)
+   * 8..8 (1): Condition Code
+   * 9..12 (4): Access Code / TAC
+   * 13..27 (15): Dialed Number
+   * 28..37 (10): Calling Number
+   * 38..52 (15): Account Code / Auth Code
+   * 53..56 (4): Trunk Group (optional)
+   */
+  private parseTimeFirstUnformatted(line: string, fallbackDate?: Date | null): ParsedCdrRecord {
+    const timeStr = line.slice(0, 4);
+    const durStr = line.slice(4, 8);
+    const conditionCode = (line.slice(8, 9) || '0').toUpperCase();
+    const accessCode = sanitizePrintable(line.slice(9, 13), 16);
+    const dialedRaw = sanitizePrintable(line.slice(13, 28), 32);
+    const callingNumber = sanitizePrintable(line.slice(28, 38), 32) || 'UNKNOWN';
+    const accountCode = sanitizePrintable(line.slice(38, 53), 32) || null;
+    const rawTrunk = sanitizePrintable(line.slice(53, 57), 16);
+
+    const baseDate = fallbackDate || new Date();
+    const { hour, minute, second } = parseAvayaTimeOnly(timeStr);
+    const callStartTime = new Date(
+      baseDate.getFullYear(),
+      baseDate.getMonth(),
+      baseDate.getDate(),
+      hour,
+      minute,
+      second,
+      0
+    );
+
+    const calledNumber =
+      dialedRaw.startsWith('9') && dialedRaw.length > 6 ? dialedRaw.slice(1) : dialedRaw || 'UNKNOWN';
+    const callDurationSec = parseAvayaDuration(durStr);
+    const trunkGroup = deriveTrunkGroup(rawTrunk, accessCode);
+    const callType = classifyCallType({
+      conditionCode,
+      callingNumber,
+      calledNumber,
+      accessCode,
+      trunkGroup,
+    });
+
+    const station = isInternalExtension(callingNumber)
+      ? callingNumber.slice(0, MAX_EXTENSION_LENGTH)
+      : isInternalExtension(calledNumber)
+      ? calledNumber.slice(0, MAX_EXTENSION_LENGTH)
+      : null;
+
+    return {
+      callStartTime,
+      callDurationSec,
+      callingNumber,
+      calledNumber,
+      trunkGroup,
+      station,
+      callType,
+      conditionCode,
+      accessCode: accessCode || null,
+      accountCode,
+      ucid: null,
+      formatProfile: 'UNFORMATTED',
+      rawRecord: line,
+    };
   }
 
   private parseFixedWidth(line: string, profileName: CdrFormatProfile): ParsedCdrRecord {
@@ -296,15 +495,17 @@ export class CdrParser {
     const callingNumber = sanitizePrintable(sliceField(line, spec.fields.callingNumber), 32) || 'UNKNOWN';
     const accountCode = sanitizePrintable(sliceField(line, spec.fields.accountCode), 32) || null;
     const rawTrunk = sanitizePrintable(sliceField(line, spec.fields.trunkGroup), 16);
-    const explicitStation = sanitizePrintable(sliceField(line, spec.fields.station), 16);
+    const explicitStation = sanitizePrintable(
+      sliceField(line, spec.fields.station),
+      MAX_EXTENSION_LENGTH
+    );
     const ucid = sanitizePrintable(sliceField(line, spec.fields.ucid), 32) || null;
 
-    // Strip leading ARS/AAR dial-out prefix '9' if dialed number is external (>6 digits)
     const calledNumber =
       dialedRaw.startsWith('9') && dialedRaw.length > 6 ? dialedRaw.slice(1) : dialedRaw || 'UNKNOWN';
 
     const callStartTime = parseAvayaDateTime(dateStr, timeStr);
-    const callDurationSec = parseAvayaTenthsDuration(durStr);
+    const callDurationSec = parseAvayaDuration(durStr);
     const trunkGroup = deriveTrunkGroup(rawTrunk, accessCode);
     const callType = classifyCallType({
       conditionCode,
@@ -339,14 +540,21 @@ export class CdrParser {
     };
   }
 
-  private parseSpaceDelimited(
+  private parseDelimited(
     trimmed: string,
     rawRecord: string,
     profileName: CdrFormatProfile
   ): ParsedCdrRecord {
-    const tokens = trimmed.split(/\s+/);
+    const tokens = trimmed.includes(',')
+      ? trimmed.split(/\s*,\s*/).filter(Boolean)
+      : trimmed.includes(';')
+      ? trimmed.split(/\s*;\s*/).filter(Boolean)
+      : trimmed.split(/\s+/);
+
     if (tokens.length < 6) {
-      throw new Error(`Invalid space-delimited Avaya CDR line (expected >= 6 tokens, got ${tokens.length})`);
+      throw new Error(
+        `Invalid space-delimited Avaya CDR line (expected >= 6 tokens, got ${tokens.length})`
+      );
     }
 
     const dateStr = tokens[0];
@@ -361,7 +569,6 @@ export class CdrParser {
     let rawTrunk = '';
     let ucid: string | null = null;
 
-    // Detect whether token[4] is a 3-4 digit TAC (e.g., 801) or directly the dialed number
     if (tokens.length >= 7 && /^\d{3,4}$/.test(tokens[4]) && tokens[4].startsWith('8')) {
       accessCode = sanitizePrintable(tokens[4], 16);
       dialedRaw = sanitizePrintable(tokens[5], 32);
@@ -380,7 +587,7 @@ export class CdrParser {
     const calledNumber =
       dialedRaw.startsWith('9') && dialedRaw.length > 6 ? dialedRaw.slice(1) : dialedRaw || 'UNKNOWN';
     const callStartTime = parseAvayaDateTime(dateStr, timeStr);
-    const callDurationSec = parseAvayaTenthsDuration(durStr);
+    const callDurationSec = parseAvayaDuration(durStr);
     const trunkGroup = deriveTrunkGroup(rawTrunk, accessCode);
     const callType = classifyCallType({
       conditionCode,
@@ -391,9 +598,9 @@ export class CdrParser {
     });
 
     const station = isInternalExtension(callingNumber)
-      ? callingNumber
+      ? callingNumber.slice(0, MAX_EXTENSION_LENGTH)
       : isInternalExtension(calledNumber)
-      ? calledNumber
+      ? calledNumber.slice(0, MAX_EXTENSION_LENGTH)
       : null;
 
     return {
@@ -414,9 +621,6 @@ export class CdrParser {
   }
 }
 
-/**
- * Helper to generate authentic fixed-width CM4PLUS or LEGACY CDR lines for testing & TCP simulation.
- */
 export function buildFixedWidthCdrLine(params: {
   profile: CdrFormatProfile;
   date: Date;
@@ -456,7 +660,6 @@ export function buildFixedWidthCdrLine(params: {
     return `${mm}${dd}${yy} ${hh}${min} ${dur} ${params.conditionCode} ${tac} ${params.dialedNumber} ${params.callingNumber} ${acct} ${tg} ${ucid}`;
   }
 
-  // CM4PLUS (90 chars fixed width)
   const dur = String(params.durationTenths).padStart(5, '0').slice(0, 5);
   const cond = (params.conditionCode || '0').slice(0, 1);
   const tac = (params.accessCode || '').padEnd(4, ' ').slice(0, 4);
@@ -464,7 +667,10 @@ export function buildFixedWidthCdrLine(params: {
   const calling = params.callingNumber.padEnd(15, ' ').slice(0, 15);
   const acct = (params.accountCode || '').padEnd(8, ' ').slice(0, 8);
   const tg = (params.trunkGroup || '').padEnd(4, ' ').slice(0, 4);
-  const stn = (params.station || '').padEnd(5, ' ').slice(0, 5);
+  const stn = (params.station || '')
+    .slice(0, MAX_EXTENSION_LENGTH)
+    .padEnd(5, ' ')
+    .slice(0, 5);
   const ucid = (params.ucid || '00001000011731458290').padEnd(20, '0').slice(0, 20);
   return `${mm}${dd}${yy}${hh}${min}${dur}${cond}${tac}${dialed}${calling}${acct}${tg}${stn}${ucid}`;
 }

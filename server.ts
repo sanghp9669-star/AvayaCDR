@@ -3,12 +3,13 @@ import express from 'express';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type {
-  CdrCallType,
-  CdrConnectionConfigDto,
-  CdrFormatProfile,
-  CdrProtocol,
-  CdrQueryFilter,
+import {
+  MAX_EXTENSION_LENGTH,
+  type CdrCallType,
+  type CdrConnectionConfigDto,
+  type CdrFormatProfile,
+  type CdrProtocol,
+  type CdrQueryFilter,
 } from './shared/cdrTypes.ts';
 import { CdrListenerService } from './server/cdrListener.ts';
 import {
@@ -399,6 +400,17 @@ async function startServer() {
     res.json({ user: req.user });
   });
 
+  // GET /api/listener/diagnostics — Live Avaya CM TCP/UDP adjunct socket & parser diagnostics
+  app.get('/api/listener/diagnostics', requireAuth, async (_req: AuthRequest, res) => {
+    try {
+      await syncPersistedSettingsIfPresent();
+      res.json(cdrListener.getDiagnostics());
+    } catch (error) {
+      logError('GET /api/listener/diagnostics failed', error);
+      res.status(500).json({ error: 'Không thể tải chẩn đoán kết nối CDR Listener.' });
+    }
+  });
+
   app.get('/api/config/info', requireAuth, async (_req: AuthRequest, res) => {
     try {
       const connection = await syncPersistedSettingsIfPresent();
@@ -567,6 +579,7 @@ async function startServer() {
   // GET /api/cdr — Filtered, sorted, paginated CDR list
   app.get('/api/cdr', requireAuth, async (req: AuthRequest, res) => {
     try {
+      await syncPersistedSettingsIfPresent();
       const filter = extractCdrFilter(req.query as Record<string, unknown>);
       if (filter.from && Number.isNaN(new Date(filter.from).getTime())) {
         res.status(400).json({ error: 'Invalid "from" datetime parameter' });
@@ -574,6 +587,12 @@ async function startServer() {
       }
       if (filter.to && Number.isNaN(new Date(filter.to).getTime())) {
         res.status(400).json({ error: 'Invalid "to" datetime parameter' });
+        return;
+      }
+      if (filter.station && filter.station.length > MAX_EXTENSION_LENGTH) {
+        res.status(400).json({
+          error: `Độ dài máy nhánh (extension) tối đa là ${MAX_EXTENSION_LENGTH} ký tự`,
+        });
         return;
       }
 
@@ -589,6 +608,12 @@ async function startServer() {
   app.get('/api/cdr/export', requireAuth, async (req: AuthRequest, res) => {
     try {
       const filter = extractCdrFilter(req.query as Record<string, unknown>);
+      if (filter.station && filter.station.length > MAX_EXTENSION_LENGTH) {
+        res.status(400).json({
+          error: `Độ dài máy nhánh (extension) tối đa là ${MAX_EXTENSION_LENGTH} ký tự`,
+        });
+        return;
+      }
       const records = await exportCdrRecords(filter);
 
       const headers = [

@@ -1,11 +1,12 @@
 import { and, asc, desc, eq, gte, ilike, lte, or, sql, type SQL } from 'drizzle-orm';
-import type {
-  CdrCallType,
-  CdrFormatProfile,
-  CdrListResponse,
-  CdrQueryFilter,
-  CdrRecordDto,
-  CdrSummaryStats,
+import {
+  MAX_EXTENSION_LENGTH,
+  type CdrCallType,
+  type CdrFormatProfile,
+  type CdrListResponse,
+  type CdrQueryFilter,
+  type CdrRecordDto,
+  type CdrSummaryStats,
 } from '../../shared/cdrTypes.ts';
 import { buildFixedWidthCdrLine, CdrParser, type ParsedCdrRecord } from '../../server/cdrParser.ts';
 import { logError } from '../../server/logger.ts';
@@ -101,7 +102,7 @@ export async function insertCdrRecord(parsed: ParsedCdrRecord): Promise<CdrRecor
         callingNumber: parsed.callingNumber,
         calledNumber: parsed.calledNumber,
         trunkGroup: parsed.trunkGroup,
-        station: parsed.station,
+        station: parsed.station ? parsed.station.slice(0, MAX_EXTENSION_LENGTH) : null,
         callType: parsed.callType,
         conditionCode: parsed.conditionCode,
         accessCode: parsed.accessCode,

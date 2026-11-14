@@ -22,6 +22,7 @@ import {
 const DEFAULT_FILTER: CdrQueryFilter = {
   from: undefined,
   to: undefined,
+  station: '',
   calling_number: '',
   called_number: '',
   trunk_group: '',
@@ -65,6 +66,7 @@ function DashboardShell() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [sendingTcp, setSendingTcp] = useState(false);
   const [seeding, setSeeding] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(true);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -73,9 +75,9 @@ function DashboardShell() {
   }, [isDark]);
 
   const loadCdrList = useCallback(
-    async (currentFilter: CdrQueryFilter) => {
+    async (currentFilter: CdrQueryFilter, silent = false) => {
       if (!user) return;
-      setLoading(true);
+      if (!silent) setLoading(true);
       setError(null);
       try {
         const token = await getToken();
@@ -84,7 +86,7 @@ function DashboardShell() {
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Không thể tải dữ liệu CDR.');
       } finally {
-        setLoading(false);
+        if (!silent) setLoading(false);
       }
     },
     [user, getToken]
@@ -97,6 +99,14 @@ function DashboardShell() {
     }, 150);
     return () => clearTimeout(timer);
   }, [user, activeTab, filter, loadCdrList]);
+
+  useEffect(() => {
+    if (!user || activeTab !== 'cdr' || !autoRefresh) return;
+    const interval = setInterval(() => {
+      void loadCdrList(filter, true);
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [user, activeTab, autoRefresh, filter, loadCdrList]);
 
   if (authLoading) {
     return (
@@ -201,6 +211,10 @@ function DashboardShell() {
                 filter={filter}
                 onChange={handleFilterChange}
                 onReset={() => setFilter(DEFAULT_FILTER)}
+                onRefresh={() => void loadCdrList(filter)}
+                refreshing={loading}
+                autoRefresh={autoRefresh}
+                onToggleAutoRefresh={() => setAutoRefresh((v) => !v)}
                 onSendTcpTest={handleSendTcpTest}
                 sendingTcp={sendingTcp}
               />

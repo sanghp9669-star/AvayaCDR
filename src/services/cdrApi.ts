@@ -2,6 +2,7 @@ import type {
   CdrConnectionConfigDto,
   CdrFormatProfile,
   CdrListResponse,
+  CdrListenerDiagnosticsDto,
   CdrProtocol,
   CdrQueryFilter,
   CdrRecordDto,
@@ -164,6 +165,19 @@ export async function fetchConfigInfo(token: string): Promise<ListenerConfigInfo
   const data = await res.json();
   if (!res.ok) {
     throw new Error(data.error || 'Không thể tải cấu hình listener.');
+  }
+  return data;
+}
+
+export async function fetchListenerDiagnostics(
+  token: string
+): Promise<CdrListenerDiagnosticsDto> {
+  const res = await fetch('/api/listener/diagnostics', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Không thể tải chẩn đoán CDR Listener.');
   }
   return data;
 }
